@@ -20,5 +20,5 @@
 - [x] 4.1 Unit tests with fake ACP agent (method selection, env stripping, state transitions, gate).
 - [x] 4.2 Replay proxy (Anthropic Messages + OpenAI Responses SSE), Pi fixture, offline e2e through the coordinator.
 - [ ] 4.3 Live OpenRouter smoke test in GitHub Actions.
-- [ ] 4.4 CDP desktop e2e with real input.
+- [ ] 4.4 CDP desktop e2e with real input (`scripts/acp-cdp`; Codex blocked by the Settings sync defect in its README).
 - [x] 4.5 typecheck, lint, architecture check.
