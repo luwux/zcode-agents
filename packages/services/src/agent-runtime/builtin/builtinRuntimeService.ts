@@ -33,9 +33,18 @@ export async function saveBuiltinRuntimeConfig(
   const { apiKey, ...config } = input;
   if ((await readAgentServersRegistry()).servers.some((server) => server.id === config.id))
     throw new Error("Agent ID is used by a custom ACP server");
+  const previous = await findAgentConfig(config.id);
   const saved = await saveAgentConfig(config);
   if (apiKey !== undefined)
     await saveBuiltinConfigApiKey(saved.id, apiKey?.trim() ? apiKey.trim() : null);
+  // 新 Key/新路由需要重新判定认证；Provider 或认证方式变化后旧模型目录不再可信。
+  acpAuthStateStore.reset(saved.id);
+  if (
+    previous &&
+    (previous.auth !== saved.auth ||
+      JSON.stringify(previous.provider ?? {}) !== JSON.stringify(saved.provider ?? {}))
+  )
+    await saveAcpModels(saved.id, builtinConfigFingerprint(saved), [], []);
   return saved;
 }
 

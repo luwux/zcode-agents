@@ -311,3 +311,66 @@ test("a rejected BYOK key is reported as a key problem, not a sign-in prompt", a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("saving a config resets its auth state and clears a stale model catalog", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "codez-acp-save-reset-"));
+  setDataBaseDir(dir);
+  try {
+    const { saveBuiltinRuntimeConfig } =
+      await import("../src/agent-runtime/builtin/builtinRuntimeService.js");
+    const { acpAuthStateStore } = await import("../src/agent-runtime/acpAuthState.js");
+    const { readAcpModelCatalog, saveAcpModels } =
+      await import("../src/agent-runtime/acpProviderModels.js");
+    const { builtinConfigFingerprint } =
+      await import("../src/agent-runtime/builtin/builtinRuntimeLaunch.js");
+    const base = { id: "cfg-reset", name: "R", runtime: "claude-code", auth: "byok" };
+    const first = await saveBuiltinRuntimeConfig({
+      ...base,
+      provider: { preset: "openrouter", model: "a" },
+    });
+    const fingerprint = builtinConfigFingerprint(first);
+    await saveAcpModels("cfg-reset", fingerprint, [{ id: "m1", name: "M1" }]);
+    acpAuthStateStore.markAuthRequired("cfg-reset", "API key rejected by the provider: 401");
+    await saveBuiltinRuntimeConfig({ ...base, provider: { preset: "openrouter", model: "b" } });
+    assert.equal(acpAuthStateStore.get("cfg-reset").state, "unknown");
+    assert.deepEqual((await readAcpModelCatalog("cfg-reset", fingerprint)).models, []);
+  } finally {
+    setDataBaseDir(null);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("terminal-UI-only login without a TTY fails with an actionable message", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "codez-acp-tui-"));
+  const agentFile = join(dir, "tui-agent.mjs");
+  await writeFile(
+    agentFile,
+    `import { createInterface } from 'node:readline';
+for await (const line of createInterface({ input: process.stdin })) {
+  const r = JSON.parse(line);
+  if (r.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: r.id, result: {
+    protocolVersion: r.params.protocolVersion, agentCapabilities: {},
+    authMethods: [{ id: 'claude-login', name: 'Log in with Claude', type: 'terminal', args: ['--cli'] }] } }) + '\\n');
+}`,
+  );
+  const states = new AcpAuthStateStore();
+  try {
+    const handle = startBuiltinLogin(
+      { id: "tui", name: "TUI", runtime: "claude-code", auth: "subscription" },
+      {},
+      {
+        resolveLaunch: async () => ({
+          executable: process.execPath,
+          args: [agentFile],
+          env: process.env,
+        }),
+        cwd: dir,
+        authStates: states,
+      },
+    );
+    assert.equal((await handle.completion).state, "auth-required");
+    assert.match(states.get("tui").message ?? "", /needs an interactive terminal.*login\.ts tui/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

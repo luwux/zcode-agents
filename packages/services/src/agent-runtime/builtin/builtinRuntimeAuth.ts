@@ -68,8 +68,7 @@ const loginsInFlight = new Map<string, BuiltinLoginHandle>();
 /** 仅 TUI 的终端方法（claude-agent-acp 在远程/NO_BROWSER 环境下的 `claude-login`，args 只有 --cli）。 */
 export function isInteractiveOnlyMethod(method: AuthMethod): boolean {
   if (!("type" in method) || method.type !== "terminal") return false;
-  const args = method.args ?? [];
-  return args.length === 0 || args.every((arg) => arg === "--cli");
+  return (method.args ?? []).every((arg) => arg === "--cli");
 }
 
 export function startBuiltinLogin(
@@ -135,9 +134,14 @@ function startLoginOnce(
             connection.initializeResponse.authMethods,
             options.methodId,
           );
+          if (isInteractiveOnlyMethod(method) && !deps.interactive)
+            throw new Error(
+              `${method.name} needs an interactive terminal on this host; run scripts/acp-runtimes/login.ts ${config.id}`,
+            );
           if (!("type" in method) || method.type !== "terminal") {
             announce({ message: `Continue sign-in for ${config.name} in your browser` });
-            await connection.authenticate(method.id);
+            // 修复原因：浏览器登录在无头/被放弃时会无限等待，泄漏适配器与本地回调服务；与终端登录同一超时。
+            await withLoginTimeout(connection.authenticate(method.id));
           }
         } finally {
           await connection.close();
