@@ -93,7 +93,12 @@ sequenceDiagram
 - 离线：`scripts/acp-replay/replay-proxy.mjs` 回放 fixture（每个主请求推进一段；无 tools 的旁路请求返回固定短文本、
   不推进）；e2e 在 `unshare -rn` + 仅 loopback 的网络命名空间中通过 CodeZ `AcpRuntimeCoordinator` 驱动真实 CLI。
 - 在线：OpenRouter `xiaomi/mimo-v2.6-flash`，仅 GitHub Actions secret，缺失即跳过。
-- 桌面：Playwright `_electron` + 真实点击/键入，截图与 CDP 日志为产物。
+- 桌面：`scripts/acp-cdp/run-cdp-e2e.mjs` 以 `--remote-debugging-port` 启动真实 Electron（生产构建的
+  `packages/desktop/out`，Linux 无 DISPLAY 时经 `xvfb-run`，回放模式在仅 loopback 的网络命名空间内），
+  Playwright `connectOverCDP` 只做真实点击/悬停/键入与只读 DOM 断言；每个用例使用一次性 HOME、数据目录与
+  git workspace，经 `--open-workspace` 打开，经设置页「同步 Agent 模型」启用模型后在 composer 模型选择器中
+  选择 Runtime。产物为逐步截图、Playwright trace、CDP 事件 JSONL 与 app/proxy 日志；无法运行的用例以
+  SKIPPED + 原因报告（Pi 无权限请求）。
 
 ## Risks / Trade-offs
 

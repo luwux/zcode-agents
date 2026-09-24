@@ -7,8 +7,12 @@
         ".release-it.mjs",
         ".vscode/*.mjs",
         "scripts/check-workspace-freshness.mjs",
-        "scripts/mise-run.mjs"
-      ]
+        "scripts/mise-run.mjs",
+        "scripts/acp-replay/*.{mjs,ts}",
+        "scripts/acp-cdp/*.{mjs,cjs,ts}",
+        "scripts/acp-cdp/lib/*.test.mjs"
+      ],
+      "ignoreDependencies": ["electron", "playwright-core", "yazl"]
     },
     "packages/desktop": {
       "entry": [
