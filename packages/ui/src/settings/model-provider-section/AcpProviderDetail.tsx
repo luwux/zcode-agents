@@ -231,7 +231,8 @@ export function AcpProviderDetail({
         </p>
       </div>
       <p className="break-all text-ui-sm text-foreground-subtle">
-        配置文件：{configPath ?? status?.configPath ?? "~/.codez/v2/agent-servers.json"}
+        {/* 修复原因：内置运行时配置保存在 agent-configs.json；列表首项的路径只适用于新建自定义 ACP Server。 */}
+        配置文件：{status?.configPath ?? configPath ?? "~/.codez/v2/agent-servers.json"}
       </p>
       {status ? (
         <div className="space-y-1 text-ui-sm">

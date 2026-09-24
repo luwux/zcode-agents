@@ -157,9 +157,10 @@ of each `trace.zip`, and fails if the key appears anywhere (`secret-scan.json`).
 deleted unless `--keep` is given; do not use `--keep` in live mode unless you delete them afterwards.
 
 Live cases: `<runtime>--live-turn` (asks the model to run `ls` with its shell tool and answer; answers
-any permission prompt with _allow once_) and `<runtime>--live-permission` (Claude Code `Manual`, Codex
-`Ask for approval`; asks for `touch live-permission-marker.txt`, expects the dialog, clicks allow,
-checks the file). Real models can decline to call tools; such cases end as `INCONCLUSIVE` with the
+any permission prompt with _allow once_) and `<runtime>--live-permission` (Claude Code `Manual`: asks for
+`touch live-permission-marker.txt`; Codex `Ask for approval`: asks for a `curl` to openrouter.ai followed
+by the `touch`, because that mode's workspace-write sandbox only asks for network access or files outside
+the workspace; both expect the dialog, click allow and check the file). Real models can decline to call tools; such cases end as `INCONCLUSIVE` with the
 reason, a write without a prompt ends as `FAILED`.
 
 ## Findings from running the suite (Linux, replay)
@@ -172,29 +173,20 @@ reason, a write without a prompt ends as `FAILED`.
    (macOS reports the Electron bundle version, so it is unaffected). The hook only calls
    `app.setVersion(<out/metadata/build-meta.json appVersion>)`, the value electron-builder writes into
    packaged apps.
-2. **Codex cannot be enabled from Settings with a custom provider.** _同步 Agent 模型_ calls
-   `discoverAgentRuntimeConfig({ includeAllModelThoughtLevels: true })`
-   (`packages/ui/src/settings/model-provider-section/AcpProviderDetail.tsx:136`).
-   `packages/services/src/agent-runtime/acpConfigDiscovery.ts:55-62` then calls `setModel()` for every
-   model of the _initial_ list and finally re-selects the original model. codex-acp lists the configured
-   non-preset model (`gpt-5.4` in the replay config) only until another model is selected; afterwards it
-   is gone from the options, so the final `setModel()` throws `ACP model is unavailable`
-   (`packages/services/src/agent-runtime/acpConnection.ts:273`). No catalog is saved and Codex never
-   appears in the composer picker, so both Codex cases FAIL in the default run. The OpenRouter model in
-   live mode is very likely affected the same way (not verified here: no key). With
-   `--seed-model-catalog codex` (catalog written by the app's own `discoverAcpRuntimeConfig()` without
-   the per-model probing, plus `saveAcpModels()`) the rest of the Codex flow passes: picker, the
-   _Ask for approval_ mode, streaming, tool cards, the permission dialog and the marker file.
-3. While diagnosing (2) with a first workaround that seeded only the agent-default model
-   (`__agent_default__`, what the Host saves for runtimes that advertise no models), the **second**
-   prompt of a session failed with `Invalid ACP model selection`: the composer sends
-   `switchModelConfig { model: "__agent_default__" }`, `packages/services/src/agent-runtime/acpV4Bridge.ts:255-256`
-   forwards it to `AcpConnection.setModel()`, which cannot decode the default id. Not reproduced through
-   the product UI (it needs a runtime that advertises no model options).
-4. Settings › ACP detail shows `…/agent-servers.json` as the config file for built-in configs:
-   `packages/ui/src/settings/ModelProviderSection.tsx:1140` passes `configPath={acpStatuses[0]?.configPath}`
-   (the `zcode-cli` entry) and `model-provider-section/AcpProviderDetail.tsx:234` prefers it over
-   `status.configPath` (`…/agent-configs.json`). Cosmetic, not fixed here.
+2. **Fixed: Codex could not be enabled from Settings with a custom provider.** _同步 Agent 模型_ calls
+   `discoverAgentRuntimeConfig({ includeAllModelThoughtLevels: true })`, which probes every model's thought
+   levels. codex-acp lists the configured non-preset model (`gpt-5.4` in the replay config, the OpenRouter
+   model in live mode) only while it is current, so switching back after probing a preset threw
+   `ACP model is unavailable` and no catalog was saved. `acpConfigDiscovery.ts` now keeps the initial
+   model's levels from the first snapshot and tolerates per-model switch failures
+   (`packages/services/test/acpModelDiscovery.test.ts`). Both Codex cases pass without
+   `--seed-model-catalog`, which remains only as a diagnostic option.
+3. **Fixed:** the composer's agent-default placeholder (`__agent_default__`, saved for runtimes that
+   advertise no models) was forwarded to `AcpConnection.setModel()` and failed the second prompt with
+   `Invalid ACP model selection`; the coordinator now treats it as "keep the agent's model", like session
+   creation does.
+4. **Fixed:** Settings › ACP detail showed `…/agent-servers.json` as the config file for built-in configs;
+   it now prefers the status's own path (`…/agent-configs.json`).
 5. `pnpm typecheck` clobbers the host bundle: `tsc -b` builds `packages/desktop/tsconfig.host.json`,
    whose `outDir` is `out/host`, so it writes unbundled JS and `.d.ts` over the tsup output. On the
    next app start the Host process exits with `ERR_MODULE_NOT_FOUND` for

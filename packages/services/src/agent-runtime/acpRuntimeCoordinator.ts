@@ -4,7 +4,7 @@ import { open, realpath, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { AgentRuntimeId, ZCodeTaskMeta } from "@zcode/shared";
+import { ACP_DEFAULT_MODEL_ID, type AgentRuntimeId, type ZCodeTaskMeta } from "@zcode/shared";
 import type { AgentRuntimeConfigPreview } from "#src/zcode-agent/zcodeAgent.js";
 import { discoverAcpRuntimeConfig } from "#src/agent-runtime/acpConfigDiscovery.js";
 import type {
@@ -655,6 +655,9 @@ export class AcpRuntimeCoordinator {
   async setModel(target: AcpWorkspaceTarget & { taskId: string; value: string }): Promise<void> {
     const managed = this.active.get(sessionKey(target, target.taskId));
     if (!managed) throw new Error("ACP session is not loaded");
+    // 修复原因：模型目录为空时 UI 以 ACP_DEFAULT_MODEL_ID 占位；它表示“沿用 Agent 默认”，与建会话时一致，
+    // 不能当作模型选择转发给 Agent（否则第二次发送因 “Invalid ACP model selection” 失败）。
+    if (target.value === ACP_DEFAULT_MODEL_ID) return;
     let result: Awaited<ReturnType<AcpConnection["setModel"]>>;
     try {
       result = await managed.connection.setModel(target.value);

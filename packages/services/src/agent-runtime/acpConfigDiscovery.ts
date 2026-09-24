@@ -52,14 +52,28 @@ export async function discoverAcpRuntimeConfig(input: {
     const selectedModel = models.find((model) => model.selected)?.id ?? "";
     const modelThoughtLevels = new Map<string, Array<{ value: string; name: string }>>();
     if (input.includeAllModelThoughtLevels) {
-      for (const model of models) {
-        await connection.setModel(model.id);
+      if (selectedModel)
         modelThoughtLevels.set(
-          model.id,
-          connection.thinkingLevels().map(({ value, name }) => ({ value, name })),
+          selectedModel,
+          levels.map(({ value, name }) => ({ value, name })),
         );
+      for (const model of models) {
+        if (model.id === selectedModel) continue;
+        // 修复原因：codex-acp 只在自定义模型（BYOK 的 OpenRouter/MiMo 等不在其目录中的模型）为当前模型时
+        // 才列出它，切到预设模型后便无法切回；逐个探测时单个模型切换失败只让该模型的思考档位留空，
+        // 不再让整个同步失败（否则 Codex 永远进不了模型选择器）。
+        try {
+          await connection.setModel(model.id);
+          modelThoughtLevels.set(
+            model.id,
+            connection.thinkingLevels().map(({ value, name }) => ({ value, name })),
+          );
+        } catch {
+          continue;
+        }
       }
-      if (selectedModel) await connection.setModel(selectedModel);
+      // 探测用的临时进程随后关闭；尽力切回原模型即可，失败不影响目录。
+      if (selectedModel) await connection.setModel(selectedModel).catch(() => {});
     } else if (selectedModel) {
       modelThoughtLevels.set(
         selectedModel,

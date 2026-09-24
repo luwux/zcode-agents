@@ -14,19 +14,6 @@ const PERMISSION_MODE = {
   codex: { id: "read-only", name: "Ask for approval" },
 };
 
-/**
- * Known app defect that stops the Settings › ACP "同步 Agent 模型" step for Codex with a custom
- * provider model (see scripts/acp-cdp/README.md, "Findings").
- */
-const CODEX_SYNC_ISSUE = {
-  match: /ACP model is unavailable/,
-  note:
-    "Settings sync (AcpProviderDetail.tsx:136 includeAllModelThoughtLevels) makes " +
-    "acpConfigDiscovery.ts:55-62 call setModel() for every model of the first list and then re-select " +
-    "the original one; codex-acp lists the configured non-preset model (e.g. gpt-5.4) only until " +
-    "another model is selected, so the final setModel() throws at acpConnection.ts:273",
-};
-
 const PI_PERMISSION_SKIP =
   "Pi's ACP adapter (acp-extension-pi) never sends session/request_permission: every tool runs " +
   "without approval, so there is no permission prompt to answer";
@@ -37,6 +24,19 @@ function replayProvider(runtime, url, model) {
   if (runtime === "pi") return { preset: "custom", baseUrl: url, api: "anthropic-messages", model };
   return { preset: "custom", baseUrl: url, model };
 }
+
+/**
+ * Codex 的 "Ask for approval"（read-only 模式 id）使用 workspace-write 沙箱：工作区内的 touch 不会询问，
+ * 只有联网或写工作区外才申请越权，因此 Codex 的实时权限用例用一条需要联网的命令触发审批。
+ */
+const LIVE_PERMISSION_PROMPT = {
+  "claude-code":
+    "Use your shell tool to run exactly `touch live-permission-marker.txt` in the current directory. Do nothing else, then reply DONE.",
+  codex:
+    "Use your shell tool to run exactly `curl -sS -o /dev/null https://openrouter.ai/ && touch live-permission-marker.txt` " +
+    "in the current directory. It needs network access: if the sandbox blocks it, run it again with escalated " +
+    "permissions. Do nothing else, then reply DONE.",
+};
 
 function liveProvider() {
   return { preset: "openrouter", model: LIVE_MODEL };
@@ -75,7 +75,6 @@ export function buildCases({ mode, runtimes }) {
       cases.push({
         id: `${runtime}--multi-turn`,
         runtime,
-        knownIssue: runtime === "codex" ? CODEX_SYNC_ISSUE : undefined,
         title: `${label} multi-turn replay`,
         configId: `cdp-replay-${runtime}`,
         configName: `CDP replay ${label}`,
@@ -99,7 +98,6 @@ export function buildCases({ mode, runtimes }) {
       cases.push({
         id: `${runtime}--permission`,
         runtime,
-        knownIssue: runtime === "codex" ? CODEX_SYNC_ISSUE : undefined,
         title: `${label} permission prompt`,
         configId: `cdp-replay-${runtime}-permission`,
         configName: `CDP replay ${label} permission`,
@@ -115,7 +113,6 @@ export function buildCases({ mode, runtimes }) {
     cases.push({
       id: `${runtime}--live-turn`,
       runtime,
-      knownIssue: runtime === "codex" ? CODEX_SYNC_ISSUE : undefined,
       title: `${label} live turn (OpenRouter ${LIVE_MODEL})`,
       configId: `cdp-live-${runtime}`,
       configName: `CDP live ${label}`,
@@ -141,14 +138,11 @@ export function buildCases({ mode, runtimes }) {
     cases.push({
       id: `${runtime}--live-permission`,
       runtime,
-      knownIssue: runtime === "codex" ? CODEX_SYNC_ISSUE : undefined,
       title: `${label} live permission prompt (OpenRouter ${LIVE_MODEL})`,
       configId: `cdp-live-${runtime}-permission`,
       configName: `CDP live ${label} permission`,
       live: true,
-      prompts: [
-        "Use your shell tool to run exactly `touch live-permission-marker.txt` in the current directory. Do nothing else, then reply DONE.",
-      ],
+      prompts: [LIVE_PERMISSION_PROMPT[runtime]],
       provider: liveProvider,
       mode: PERMISSION_MODE[runtime],
       expectPermission: true,
