@@ -67,10 +67,11 @@ const CODEX_PRESETS: readonly ProviderPreset[] = [
 
 const PI_PRESETS: readonly ProviderPreset[] = [
   {
+    // 修复原因：Pi 内置 openrouter provider 对目录外模型（如 xiaomi/mimo-v2.6-flash）会挂起直到超时；
+    // 走 OpenAI 兼容端点（models.json 自定义 provider）已在实测中完成任务。
     id: "openrouter",
     name: "OpenRouter",
-    settings: { providerId: "openrouter" },
-    piKeyEnv: "OPENROUTER_API_KEY",
+    settings: { baseUrl: "https://openrouter.ai/api/v1", api: "openai-completions" },
   },
   {
     id: "anthropic",

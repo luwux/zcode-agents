@@ -100,6 +100,12 @@ back; nothing falls back to BYOK or another runtime.
 - **Electron:** Claude and Codex adapters are started through a tiny `-e` bootstrap that removes
   `ELECTRON_RUN_AS_NODE` before loading the adapter, so commands the agent runs (`electron .`, `code`)
   behave normally. Pi still needs the variable to start `pi`, so commands run by Pi inherit it.
+- **Codex Guardian + OpenRouter/MiMo:** in live runs OpenRouter answered Codex's Guardian review requests
+  with HTTP 403 "prohibited due to a violation of provider Terms Of Service", so escalations in the default
+  "agent" mode are not approved with that model; use "read-only" (ask) or "agent-full-access".
+- **Codex with non-OpenAI models:** Codex prints "Model metadata for `<model>` not found. Defaulting to
+  fallback metadata" and some models (MiMo v2.6 Flash in live runs) occasionally end a turn with reasoning
+  only, without a final message.
 - **Codex modes:** the default "agent" mode sends approvals to Codex's Guardian reviewer model (billed like
   any request); "read-only" ("Ask for approval") asks the user; "agent-full-access" never asks.
 

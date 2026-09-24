@@ -216,15 +216,35 @@ test("Pi built-in provider passes --provider/--model and only the provider key",
     config: config({
       runtime: "pi",
       auth: "byok",
+      provider: { preset: "anthropic", model: "claude-sonnet-5" },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assertSecretOnlyInEnv(plan, "ANTHROPIC_API_KEY");
+  assert.deepEqual(plan.args, ["--provider", "anthropic", "--model", "claude-sonnet-5"]);
+  assert.equal(plan.env.PI_CODING_AGENT_DIR, join(HOME, "pi"));
+});
+
+test("Pi OpenRouter preset uses the OpenAI-compatible endpoint route", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "pi",
+      auth: "byok",
       provider: { preset: "openrouter", model: "xiaomi/mimo-v2.6-flash" },
     }),
     hostEnv: HOST_ENV,
     apiKey: SECRET,
     configHome: HOME,
   });
-  assertSecretOnlyInEnv(plan, "OPENROUTER_API_KEY");
-  assert.deepEqual(plan.args, ["--provider", "openrouter", "--model", "xiaomi/mimo-v2.6-flash"]);
-  assert.equal(plan.env.PI_CODING_AGENT_DIR, join(HOME, "pi"));
+  assertSecretOnlyInEnv(plan, PI_PROVIDER_KEY_ENV);
+  const models = JSON.parse(plan.files[0]!.content) as {
+    providers: Record<string, { baseUrl: string; api: string }>;
+  };
+  assert.equal(models.providers.codez?.baseUrl, "https://openrouter.ai/api/v1");
+  assert.equal(models.providers.codez?.api, "openai-completions");
+  assert.deepEqual(plan.args, ["--provider", "codez", "--model", "xiaomi/mimo-v2.6-flash"]);
 });
 
 test("Pi custom endpoint writes models.json with an env reference, never the key", () => {

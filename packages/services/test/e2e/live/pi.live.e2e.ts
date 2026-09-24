@@ -5,5 +5,5 @@ defineLiveCases("pi", [
   { task: "website", label: "no permission system", maxPermissions: 0 },
   { task: "harness", label: "no permission system", maxPermissions: 0 },
   { task: "internet", label: "no permission system", maxPermissions: 0 },
-  { task: "website", label: "built-in openrouter provider", maxPermissions: 0, unrecorded: true },
+  { task: "website", label: "openrouter preset, unrecorded", maxPermissions: 0, unrecorded: true },
 ]);

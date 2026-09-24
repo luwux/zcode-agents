@@ -299,10 +299,10 @@ function applyPi(
   if (!input.apiKey) plan.problem = "API key is required for this configuration";
   if (settings.baseUrl) {
     if (!agentDir) {
-      plan.problem = "Custom Pi endpoints require a private CodeZ home";
+      plan.problem ??= "Custom Pi endpoints require a private CodeZ home";
       return;
     }
-    if (!settings.model) plan.problem = "A model is required for a custom Pi endpoint";
+    if (!settings.model) plan.problem ??= "A model is required for a custom Pi endpoint";
     // models.json 只含 `$VAR` 引用，密钥在 spawn 时经 env 注入，不落盘。
     plan.files.push({
       path: join(agentDir, "models.json"),

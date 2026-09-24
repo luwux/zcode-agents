@@ -91,6 +91,8 @@ jobs:
         with:
           path: ~/.cache/codez-acp-runtimes
           key: acp-runtimes-${{ runner.os }}-${{ hashFiles('packages/services/src/agent-runtime/builtin/manifests/*.json', 'packages/services/src/agent-runtime/builtin/builtinRuntimeCatalog.ts', 'packages/services/src/agent-runtime/builtin/builtinRuntimeInstaller.ts', 'packages/services/src/agent-runtime/builtin/builtinProcess.ts') }}
+      - name: Allow unprivileged user namespaces (Codex sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Install runtimes
         working-directory: packages/services
         run: CODEZ_ACP_RUNTIMES_DIR="$HOME/.cache/codez-acp-runtimes" node --import tsx ../../scripts/acp-replay/install-runtimes.ts
