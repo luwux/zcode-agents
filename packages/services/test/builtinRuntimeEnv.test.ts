@@ -171,6 +171,12 @@ test("Codex BYOK injects a session model provider without writing the key into C
     },
   );
   assert.equal(plan.env.MODEL_PROVIDER, "openrouter");
+  // app-server 的登录判定读私有 CODEX_HOME 的 config.toml；只含 env_key 引用，不含密钥。
+  assert.equal(plan.files.length, 1);
+  assert.equal(plan.files[0]!.path, join(HOME, "codex", "config.toml"));
+  assert.match(plan.files[0]!.content, /model_provider = "openrouter"/);
+  assert.match(plan.files[0]!.content, /env_key = "CODEZ_CODEX_PROVIDER_KEY"/);
+  assert.match(plan.files[0]!.content, /requires_openai_auth = false/);
   assert.equal(plan.env.CODEX_HOME, join(HOME, "codex"));
   assert.equal(plan.env.CODEX_PATH, "/managed/codex");
   assert.equal(plan.env.OPENAI_API_KEY, undefined);

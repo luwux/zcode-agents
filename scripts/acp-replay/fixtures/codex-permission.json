@@ -1,0 +1,30 @@
+{
+  "source": "codex",
+  "wire": "openai-responses",
+  "model": "gpt-5.4",
+  "note": "Hand-written permission fixture: one exec_command that asks for sandbox escalation to write a marker file inside the throwaway workspace, so on-request approval must ask.",
+  "turns": [
+    {
+      "user": { "text": "Create the marker file.", "t_ms": 0 },
+      "events": [
+        { "kind": "text", "t_ms": 10, "text": "Creating the marker file.", "phase": "commentary" },
+        {
+          "kind": "tool_call",
+          "t_ms": 20,
+          "call_id": "call_perm_01",
+          "name": "exec_command",
+          "input": {
+            "cmd": "touch replay-permission-marker.txt",
+            "workdir": "${WORKSPACE}",
+            "sandbox_permissions": "require_escalated",
+            "justification": "Create the marker file requested by the user",
+            "yield_time_ms": 1000,
+            "max_output_tokens": 200
+          }
+        },
+        { "kind": "tool_result", "t_ms": 30, "call_id": "call_perm_01", "output": "" },
+        { "kind": "text", "t_ms": 40, "text": "Marker file created.", "phase": "final_answer" }
+      ]
+    }
+  ]
+}

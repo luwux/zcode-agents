@@ -214,6 +214,27 @@ function applyCodex(
   env.CODEX_CONFIG = JSON.stringify(codexConfig);
   env.MODEL_PROVIDER = providerId;
   env[CODEX_PROVIDER_KEY_ENV] = input.apiKey ?? "";
+  // 修复原因：codex-acp 的登录判定读 app-server 自身配置（当前 provider 的 requires_openai_auth），
+  // CODEX_CONFIG 只作用于会话线程，导致 BYOK 被误判为需要 ChatGPT 登录。这里在该配置私有的
+  // CODEX_HOME 写入同样的非秘密路由（密钥仍只经 env_key 引用），从不触碰用户的 ~/.codex。
+  if (privateHome)
+    plan.files.push({
+      path: join(input.configHome, "codex", "config.toml"),
+      content: codexConfigToml(providerId, codexConfig),
+    });
+}
+
+/** 只序列化本模块生成的固定结构；字符串用 JSON 转义（与 TOML basic string 兼容）。 */
+function codexConfigToml(providerId: string, config: Record<string, unknown>): string {
+  const provider = (config.model_providers as Record<string, Record<string, unknown>>)[providerId]!;
+  const value = (entry: unknown) =>
+    typeof entry === "string" ? JSON.stringify(entry) : String(entry);
+  const lines = ["# Managed by CodeZ for this agent configuration. Changes are overwritten.", ""];
+  lines.push(`model_provider = ${value(providerId)}`);
+  if (typeof config.model === "string") lines.push(`model = ${value(config.model)}`);
+  lines.push("", `[model_providers.${JSON.stringify(providerId)}]`);
+  for (const [key, entry] of Object.entries(provider)) lines.push(`${key} = ${value(entry)}`);
+  return `${lines.join("\n")}\n`;
 }
 
 function applyPi(
