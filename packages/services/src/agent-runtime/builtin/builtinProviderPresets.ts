@@ -130,12 +130,22 @@ export function findProviderPreset(
   return presetId ? PROVIDER_PRESETS[runtime].find((preset) => preset.id === presetId) : undefined;
 }
 
+/**
+ * 未保存预设时使用的预设，与设置页 preferredPresetId 一致（OpenRouter，否则第一个）。
+ * 修复原因：只声明模型的 BYOK 配置没有 preset，设置页显示 OpenRouter，Host 却按官方端点启动，
+ * Claude 把 OpenRouter Key 发给 api.anthropic.com，401 重试期间界面一直停在 Working。
+ */
+export function defaultProviderPresetId(runtime: BuiltinAcpRuntime): string | undefined {
+  const presets = PROVIDER_PRESETS[runtime];
+  return (presets.find((preset) => preset.id === "openrouter") ?? presets[0])?.id;
+}
+
 /** 预设只补默认值；用户显式设置覆盖预设。 */
 export function resolveProviderSettings(
   runtime: BuiltinAcpRuntime,
   settings: AgentProviderSettings | undefined,
 ): AgentProviderSettings & { piKeyEnv?: string } {
-  const preset = findProviderPreset(runtime, settings?.preset);
+  const preset = findProviderPreset(runtime, settings?.preset ?? defaultProviderPresetId(runtime));
   return {
     ...preset?.settings,
     ...Object.fromEntries(

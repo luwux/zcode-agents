@@ -93,6 +93,22 @@ test("Claude BYOK via OpenRouter strips host Anthropic routing and injects the g
   assert.equal(plan.problem, undefined);
 });
 
+test("Claude BYOK without a saved preset uses the OpenRouter preset the settings page shows", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "claude-code",
+      auth: "byok",
+      provider: { models: [{ id: "deepseek/deepseek-v4.1-flash" }] },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assertSecretOnlyInEnv(plan, "ANTHROPIC_AUTH_TOKEN");
+  assert.equal(plan.env.ANTHROPIC_BASE_URL, "https://openrouter.ai/api");
+  assert.equal(plan.env.ANTHROPIC_API_KEY, "");
+});
+
 test("Claude GLM preset keeps explicit timeout and small model overrides", () => {
   const plan = buildBuiltinLaunchEnv({
     config: config({
