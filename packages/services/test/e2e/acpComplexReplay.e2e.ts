@@ -273,3 +273,46 @@ test(
     });
   },
 );
+
+test(
+  "claude-code background Bash stops through _session/async_task/stop",
+  { skip: replaySkip, timeout: 240_000 },
+  async () => {
+    await withClaude("claude-code-background-stop.json", async (run) => {
+      const task = { ...run.target, taskId: run.taskId };
+      await runPrompt(run, "Start the long watcher in the background.");
+      await waitFor(
+        () =>
+          run.coordinator
+            .snapshot(task)
+            ?.backgroundWorks.some((work) => work.status === "running") === true,
+        30_000,
+        "running background work",
+      );
+      const work = run.coordinator.snapshot(task)!.backgroundWorks[0]!;
+      assert.equal(work.cancellable, true);
+      assert.deepEqual(
+        await run.coordinator.cancelBackgroundWork({ ...task, workId: work.workId }),
+        {
+          accepted: true,
+        },
+      );
+      await waitFor(
+        () =>
+          run.coordinator
+            .snapshot(task)
+            ?.backgroundWorks.find((item) => item.workId === work.workId)?.status === "cancelled",
+        30_000,
+        "stopped state",
+      );
+      // 已停止的任务不能再次停止：以明确原因拒绝，而不是伪造成功。
+      assert.deepEqual(
+        await run.coordinator.cancelBackgroundWork({ ...task, workId: work.workId }),
+        {
+          accepted: false,
+          reason: "not_running",
+        },
+      );
+    });
+  },
+);
