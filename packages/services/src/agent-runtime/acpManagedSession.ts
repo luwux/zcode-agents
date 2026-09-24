@@ -1,3 +1,5 @@
+import type { ContentBlock } from "@agentclientprotocol/sdk";
+import type { AttachmentRef } from "@zcode/shared/zcode-protocol-v4";
 import { randomUUID } from "node:crypto";
 import type {
   CreateElicitationResponse,
@@ -37,6 +39,14 @@ export function createAcpPendingInteractions(): AcpPendingInteractions {
   return { permissions: new Map(), elicitations: new Map() };
 }
 
+export interface QueuedAcpPrompt {
+  commandId: string;
+  text: string;
+  attachments?: readonly AttachmentRef[];
+  content: ContentBlock[];
+  transcriptBlocks: ContentBlock[];
+}
+
 export interface ManagedAcpSession {
   connection: AcpConnection;
   meta: ZCodeTaskMeta;
@@ -49,6 +59,12 @@ export interface ManagedAcpSession {
   crashed: boolean;
   activeCommandId: string | null;
   turnSettled: boolean;
+  /** 已接纳但需在当前 turn 结束后启动的输入（steering 不可用或 Agent 回 promptRequired）。 */
+  queuedPrompts: QueuedAcpPrompt[];
+  /** 运行中被 Agent 拒绝的配置变更，turn 结束后按最后一次请求应用。 */
+  deferredConfig: { model?: string; thought?: string; modeId?: string };
+  /** 在途的 steer 请求；turn 结算前等待它们，保证已注入的输入记在该 turn 内。 */
+  steersInFlight: Set<Promise<unknown>>;
 }
 
 export function workspaceKey(target: {
@@ -85,6 +101,9 @@ export function createManagedAcpSession(input: {
     crashed: false,
     activeCommandId: null,
     turnSettled: true,
+    queuedPrompts: [],
+    deferredConfig: {},
+    steersInFlight: new Set(),
   };
 }
 

@@ -35,6 +35,8 @@ export function buildAcpProjectionSnapshot(input: {
   rows: ConversationRow[];
   /** 子智能体虚拟会话：只读，不接纳输入与配置命令。 */
   readOnly?: boolean;
+  /** Agent 支持运行中 steering（_session/steering 或 _lody/session/steer）。 */
+  steering?: boolean;
   backgroundWorks?: BackgroundWorkSummary[];
   subagents?: SubagentProjectionState;
   unavailableReason?: string | null;
@@ -75,13 +77,11 @@ export function buildAcpProjectionSnapshot(input: {
     availability: {
       fork: UNSUPPORTED,
       compact: UNSUPPORTED,
+      // 运行中也允许切换模型/思考等级：Host 立即转发，Agent 拒绝时在本 turn 结束后应用。
       switchModelConfig: readOnly
         ? READ_ONLY
-        : phase === "running" || input.unavailableReason
-          ? {
-              allowed: false,
-              reasonCode: input.unavailableReason ? "acpRuntimeUnavailable" : "acpTurnRunning",
-            }
+        : input.unavailableReason
+          ? { allowed: false, reasonCode: "acpRuntimeUnavailable" }
           : { allowed: true },
       setFollowupMode: UNSUPPORTED,
       queueEdit: UNSUPPORTED,
@@ -94,7 +94,9 @@ export function buildAcpProjectionSnapshot(input: {
       : input.unavailableReason
         ? { mode: "reject", reasonCode: "acpRuntimeUnavailable" }
         : phase === "running"
-          ? { mode: "reject", reasonCode: "acpTurnRunning" }
+          ? input.steering
+            ? { mode: "guide" }
+            : { mode: "reject", reasonCode: "acpTurnRunning" }
           : { mode: "startNow" },
     meta: {
       title: input.title,

@@ -83,6 +83,15 @@ Pick the provider in the composer model picker and send a prompt. To check expir
 `login.ts <id> --logout`, send another prompt: the turn ends with "Sign-in required" and the card flips
 back; nothing falls back to BYOK or another runtime.
 
+## Steering and mid-turn settings
+
+While a turn runs, the composer routes a new message as a guide (same as ZCode's own agent). Claude Code
+and Codex receive it through `_session/steering`, Pi through `_lody/session/steer`; an accepted message
+shows as an input row in the running turn. If the agent declines (no turn left to steer), the message is
+queued and starts right after the turn. Model, thinking-effort and mode changes are sent immediately;
+if the agent refuses them mid-turn they are applied as soon as the turn ends. Custom ACP servers without
+a steering method keep the old behavior (the composer blocks sending while a turn runs).
+
 ## Security notes and known limits
 
 - **BYOK keys are visible to commands the agent runs.** The key is injected into the agent's

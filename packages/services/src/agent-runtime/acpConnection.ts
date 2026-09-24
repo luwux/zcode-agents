@@ -1,4 +1,10 @@
 /* oxlint-disable eslint(max-lines) -- ACP 连接的会话配置、模式确认与进程生命周期共享原生连接状态。 */
+import {
+  detectAcpSteering,
+  steerAcpSession,
+  type AcpSteerOutcome,
+  type AcpSteeringKind,
+} from "#src/agent-runtime/acpSteering.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import {
@@ -267,6 +273,27 @@ export class AcpConnection {
     await this.connection.authenticate({ methodId });
   }
 
+  /** Agent 声明的运行中 steering 方式；null 表示运行中输入只能拒绝。 */
+  get steeringKind(): AcpSteeringKind | null {
+    return detectAcpSteering(this.initializeResponse);
+  }
+
+  get running(): boolean {
+    return this.inFlight !== null;
+  }
+
+  /** 把输入注入正在运行的 turn；promptRequired 表示 Agent 已空闲，内容仍由 Host 负责提交。 */
+  async steer(steerId: string, prompt: ContentBlock[]): Promise<AcpSteerOutcome> {
+    const sessionId = this.requireSession();
+    const kind = this.steeringKind;
+    if (!kind) throw new Error("ACP Agent does not support steering");
+    return withTimeout(
+      steerAcpSession(this.connection, kind, { sessionId, steerId, prompt }),
+      SESSION_SETUP_TIMEOUT_MS,
+      "ACP steering",
+    );
+  }
+
   get sessionId(): string | null {
     return this.nativeSessionId;
   }
@@ -314,7 +341,7 @@ export class AcpConnection {
     modelId: string,
   ): Promise<{ models: AcpModelOption[]; thinkingLevels: AcpThinkingLevel[] }> {
     const sessionId = this.requireSession();
-    if (this.inFlight) throw new Error("ACP model cannot change during a prompt");
+    // 运行中允许：Agent 在下一次模型请求时应用；拒绝时由协调器延后到 turn 结束。
     const selection = decodeModelOption(modelId);
     if (!selection) throw new Error("Invalid ACP model selection");
     const option = this.configOptions.find(
@@ -349,7 +376,7 @@ export class AcpConnection {
 
   async setThinkingLevel(value: string): Promise<AcpThinkingLevel[]> {
     const sessionId = this.requireSession();
-    if (this.inFlight) throw new Error("ACP thought level cannot change during a prompt");
+    // 运行中允许（与 ZCode guide 语义一致）；Agent 拒绝时由协调器延后到 turn 结束。
     const option = this.configOptions.find(isThinkingOption);
     if (!option || option.type !== "select")
       throw new Error("ACP Agent does not expose thought levels");

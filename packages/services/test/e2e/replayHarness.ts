@@ -13,7 +13,12 @@ export const replaySkip = replayEnabled
   ? false
   : "set CODEZ_E2E_REPLAY=1 and CODEZ_ACP_RUNTIMES_DIR (use run-replay-e2e.mjs)";
 
-export async function startProxy(fixture: string, workspace: string, log: string) {
+export async function startProxy(
+  fixture: string,
+  workspace: string,
+  log: string,
+  timing: { speed?: number; maxDelayMs?: number } = {},
+) {
   const child = spawn(
     process.execPath,
     [
@@ -25,7 +30,8 @@ export async function startProxy(fixture: string, workspace: string, log: string
       "--log",
       log,
       "--speed",
-      "50",
+      String(timing.speed ?? 50),
+      ...(timing.maxDelayMs === undefined ? [] : ["--max-delay-ms", String(timing.maxDelayMs)]),
     ],
     { stdio: ["ignore", "pipe", "inherit"] },
   );

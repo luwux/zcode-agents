@@ -82,6 +82,8 @@ export class AcpConversationProjection {
   private readonly reasoningStartedAt = new Map<number, number>();
   private anonymousChunkRow: { kind: "assistantText" | "reasoning"; rowId: number } | null = null;
   private activeTurnId: string | null = null;
+  /** Agent 是否支持运行中 steering；决定 inputRouting 是否为 guide。 */
+  private steering = false;
   private activeTurnHeaderRowId: number | null = null;
   /** 回合外内容的仅展示轮（D4）：不改变 phase，也不占用回合所有权。 */
   private displayTurn: { turnId: string; workId: string } | null = null;
@@ -137,7 +139,8 @@ export class AcpConversationProjection {
     for (const entry of entries) {
       lastAt = Math.max(lastAt, entry.at);
       if (entry.kind === "prompt") {
-        if (this.activeTurnId)
+        // steer 输入属于当时运行中的 turn，不结束它。
+        if (this.activeTurnId && !entry.steer)
           this.finishTurn({ error: "ACP turn ended without a terminal response" });
         const text = entry.content
           .filter((block) => block.type === "text")
@@ -158,7 +161,8 @@ export class AcpConversationProjection {
             return [];
           }
         });
-        this.beginTurn(entry.commandId, text, attachments, entry.at);
+        if (entry.steer && this.activeTurnId) this.appendGuide(entry.commandId, text, attachments);
+        else this.beginTurn(entry.commandId, text, attachments, entry.at);
       } else if (entry.kind === "update") {
         this.applyUpdate({ sessionId: entry.sessionId, update: entry.update }, entry.at);
       } else {
@@ -169,6 +173,27 @@ export class AcpConversationProjection {
       this.finishTurn({ error: "ACP turn outcome is unknown after process exit" });
     // 旧进程已退出：回放结束时仍在运行的子智能体与后台任务不可能继续。
     this.failOrphans(lastAt, "Subagent outcome is unknown after the Agent process exited");
+  }
+
+  setSteering(supported: boolean): void {
+    if (this.steering === supported) return;
+    this.steering = supported;
+    this.log.advance();
+  }
+
+  /** 运行中 steering 已被 Agent 接收：输入作为当前 turn 的 userInput 行呈现（与 ZCode guide 一致）。 */
+  appendGuide(commandId: string, text: string, attachments?: readonly AttachmentRef[]): boolean {
+    if (!this.activeTurnId) return false;
+    this.anonymousChunkRow = null;
+    this.log.push({
+      kind: "userInput",
+      turnId: this.activeTurnId,
+      text,
+      origin: "realUser",
+      sourceCommandId: commandId,
+      ...(attachments?.length ? { attachments: [...attachments] } : {}),
+    });
+    return true;
   }
 
   beginTurn(
@@ -643,6 +668,7 @@ export class AcpConversationProjection {
       goal: this.goal,
       rows: this.log.rows,
       readOnly: this.readOnly,
+      steering: this.steering,
       backgroundWorks: [
         ...this.works.summaries((toolCallId) => this.findToolRow(toolCallId)?.rowId ?? null),
         ...this.lodyWorks(),

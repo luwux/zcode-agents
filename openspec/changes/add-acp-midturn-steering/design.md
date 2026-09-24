@@ -25,15 +25,16 @@ sequenceDiagram
   end
   UI->>B: sendText(cmd2, "use the other file")
   B->>C: sendPrompt
-  C->>C: transcript.appendPrompt(cmd2, steer=true)
   C->>K: _session/steering / _lody/session/steer
   alt injected
     C->>C: projection.appendGuide(cmd2) in T
+    C->>C: transcript.appendPrompt(cmd2, steer=true)
   else promptRequired / refused
-    C->>C: wait for T to settle, then startNow(cmd2)
+    C->>C: queue cmd2
   end
   A-->>K: session/prompt result (T)
-  C->>C: finishTurn(T); apply deferred config
+  C->>C: await steers in flight, then finishTurn(T)
+  C->>C: apply deferred config, then startNow(next queued)
 ```
 
 Idempotency: a repeated `commandId` returns `duplicate` whether it was steered or started. Restore

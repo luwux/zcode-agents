@@ -230,6 +230,9 @@ export class AcpV4Bridge {
         const payload = commandPayloadSchemas.sendText.parse(envelope.payload);
         if (payload.context_refs?.length || payload.modelExecution)
           return reject("acpCapabilityUnsupported");
+        // 运行中输入经 steering 注入当前 turn，回执标记为 guide。
+        const delivery =
+          this.coordinator.snapshot(task)?.control.phase === "running" ? "guide" : "startNow";
         const outcome = await this.coordinator.sendPrompt({
           ...task,
           commandId: envelope.commandId,
@@ -240,7 +243,7 @@ export class AcpV4Bridge {
           commandId: envelope.commandId,
           status: outcome === "duplicate" ? "duplicate" : "accepted",
           revisionAtDecision: this.coordinator.snapshot(task)?.revision ?? revision,
-          result: { type: "inputAccepted", delivery: "startNow", inputId: envelope.commandId },
+          result: { type: "inputAccepted", delivery, inputId: envelope.commandId },
         };
       }
       case "stop":
@@ -281,7 +284,7 @@ export class AcpV4Bridge {
         const payload = commandPayloadSchemas.switchModelConfig.parse(envelope.payload);
         if (payload.provider !== "acp") return reject("acpProviderRequired");
         const current = this.coordinator.snapshot(task);
-        if (current?.control.phase === "running") return reject("acpTurnRunning");
+        // 运行中也接纳：协调器即时转发，Agent 拒绝时在 turn 结束后应用（与 ZCode guide 一致）。
         if (!payload.model && !payload.thought && !payload.acpModeId)
           return reject("acpModelOrThoughtRequired");
         if (payload.model && payload.model !== current?.config.model)

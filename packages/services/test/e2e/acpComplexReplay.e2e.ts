@@ -26,12 +26,16 @@ interface ClaudeRun {
   reopen: () => AcpRuntimeCoordinator;
 }
 
-async function withClaude(fixture: string, body: (run: ClaudeRun) => Promise<void>) {
+async function withClaude(
+  fixture: string,
+  body: (run: ClaudeRun) => Promise<void>,
+  timing?: { speed?: number; maxDelayMs?: number },
+) {
   const root = await mkdtemp(join(tmpdir(), "codez-replay-complex-"));
   setDataBaseDir(join(root, "data"));
   const workspace = await makeWorkspace(root);
   const proxyLog = join(root, "proxy.jsonl");
-  const { child: proxy, url } = await startProxy(fixture, workspace, proxyLog);
+  const { child: proxy, url } = await startProxy(fixture, workspace, proxyLog, timing);
   const repo = new TaskIndexRepo(join(root, "tasks.sqlite"));
   const permissions: RequestPermissionRequest[] = [];
   const coordinators: AcpRuntimeCoordinator[] = [];
@@ -314,5 +318,80 @@ test(
         },
       );
     });
+  },
+);
+
+test(
+  "claude-code steering: a message sent mid-turn interrupts the stream and joins the running turn",
+  { skip: replaySkip, timeout: 240_000 },
+  async () => {
+    await withClaude(
+      "claude-code-steer.json",
+      async (run) => {
+        const task = { ...run.target, taskId: run.taskId };
+        const rows = () => run.coordinator.rowsRange({ ...task, limit: 1_000 }).rows;
+        await run.coordinator.sendPrompt({
+          ...task,
+          commandId: "steer-original",
+          text: "Start a long analysis.",
+        });
+        // 回放在第一段文本后停顿 6s：此时回合仍在运行，输入路由必须是 guide（与 ZCode 引导一致）。
+        await waitFor(
+          () =>
+            rows().some(
+              (row) =>
+                row.kind === "assistantText" && row.text.includes("Starting a long analysis"),
+            ),
+          60_000,
+          "first streamed chunk",
+        );
+        const running = run.coordinator.snapshot(task)!;
+        assert.equal(running.control.phase, "running");
+        assert.equal(running.inputRouting.mode, "guide");
+        assert.equal(
+          await run.coordinator.sendPrompt({
+            ...task,
+            commandId: "steer-guide",
+            text: "Use the other file instead.",
+          }),
+          "accepted",
+        );
+        await waitFor(
+          () => run.coordinator.snapshot(task)?.control.phase !== "running",
+          120_000,
+          "steered turn completion",
+        );
+        const snapshot = run.coordinator.snapshot(task)!;
+        assert.notEqual(
+          snapshot.control.phase,
+          "error",
+          JSON.stringify(snapshot.control.lastError),
+        );
+        const all = rows();
+        const inputs = all.filter((row) => row.kind === "userInput");
+        assert.deepEqual(
+          inputs.map((row) => row.kind === "userInput" && row.sourceCommandId),
+          ["steer-original", "steer-guide"],
+        );
+        // 引导消息与被引导后的回复属于同一个回合，而不是排队后的新回合。
+        assert.equal(new Set(inputs.map((row) => row.turnId)).size, 1);
+        assert.equal(all.filter((row) => row.kind === "turnHeader").length, 1);
+        const steered = all.find(
+          (row) => row.kind === "assistantText" && row.text.includes("Steered: switching"),
+        );
+        assert.ok(steered, `steered reply: ${JSON.stringify(all.map((row) => row.kind))}`);
+        assert.equal(steered.turnId, inputs[0]!.turnId);
+        // 流被抢占：停顿后的原计划文本永远不会到达。
+        assert.ok(
+          !all.some((row) => row.kind === "assistantText" && row.text.includes("original plan")),
+        );
+        const proxyEntries = (await readFile(run.proxyLog, "utf8"))
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as { exhausted: boolean });
+        assert.ok(!proxyEntries.some((entry) => entry.exhausted), "CLI never ran past the fixture");
+      },
+      { speed: 1, maxDelayMs: 10_000 },
+    );
   },
 );

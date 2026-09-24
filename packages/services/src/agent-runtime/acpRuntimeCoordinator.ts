@@ -28,6 +28,7 @@ import {
   reconcilePendingInteractions,
   type AcpPendingInteractions,
   type ManagedAcpSession,
+  type QueuedAcpPrompt,
   workspaceKey,
   sessionKey,
 } from "#src/agent-runtime/acpManagedSession.js";
@@ -211,6 +212,7 @@ export class AcpRuntimeCoordinator {
       throw this.authFailure(input.runtimeId, error);
     });
     this.active.set(key, managed);
+    managed.projection.setSteering(managed.connection.steeringKind !== null);
     this.publish(managed);
     return managed.meta;
   }
@@ -317,6 +319,7 @@ export class AcpRuntimeCoordinator {
           pending,
         });
         this.active.set(key, managed);
+        managed.projection.setSteering(managed.connection.steeringKind !== null);
         this.unavailable.delete(key);
         this.publish(managed);
         return projection.snapshot();
@@ -344,28 +347,85 @@ export class AcpRuntimeCoordinator {
     if (managed.crashed)
       throw new Error("ACP process exited; reload the session before sending another prompt");
     if (managed.acceptedCommandIds.has(target.commandId)) return "duplicate";
-    if (managed.projection.snapshot().control.phase === "running")
-      throw new Error("ACP session is busy");
+    const running = managed.projection.snapshot().control.phase === "running";
+    if (running && !managed.connection.steeringKind) throw new Error("ACP session is busy");
     // 先校验全部附件，再持久接纳输入；任何图片能力/路径失败都不会启动部分 prompt。
     const prepared = await prepareAcpPromptAttachments(
       target.attachments ?? [],
       managed.connection.initializeResponse.agentCapabilities?.promptCapabilities?.image === true,
     );
     const textBlock: ContentBlock = { type: "text", text: target.text };
-    const content: ContentBlock[] = [textBlock, ...prepared.promptBlocks];
-    await managed.transcript.appendPrompt(target.commandId, [
-      textBlock,
-      ...prepared.transcriptBlocks,
-    ]);
-    managed.acceptedCommandIds.add(target.commandId);
-    managed.projection.beginTurn(target.commandId, target.text, target.attachments);
-    managed.activeCommandId = target.commandId;
+    const item: QueuedAcpPrompt = {
+      commandId: target.commandId,
+      text: target.text,
+      ...(target.attachments?.length ? { attachments: target.attachments } : {}),
+      content: [textBlock, ...prepared.promptBlocks],
+      transcriptBlocks: [textBlock, ...prepared.transcriptBlocks],
+    };
+    if (running) {
+      // CommandInbox：运行中的输入经 steering 注入当前 turn（与 ZCode guide 一致）。
+      managed.acceptedCommandIds.add(target.commandId);
+      void this.deliverSteer(managed, item);
+      return "accepted";
+    }
+    await this.startTurn(managed, item);
+    return "accepted";
+  }
+
+  /**
+   * 注入成功才把输入呈现为当前 turn 的 userInput 行并记入转录（steer 标记）；
+   * promptRequired / 失败时输入仍归 Host：当前 turn 已结束则立即开新 turn，否则排队到结束后。
+   */
+  private async deliverSteer(managed: ManagedAcpSession, item: QueuedAcpPrompt): Promise<void> {
+    const request = managed.connection.steer(item.commandId, item.content).then(
+      (outcome) => outcome,
+      () => "promptRequired" as const,
+    );
+    // 修复原因：steer 回包与 prompt 结果可能在同一批消息中到达；turn 结算需等待在途 steer 先落位，
+    // 否则已注入的输入会被记在 turn 结束之后，回放时误开新 turn。
+    const settled = request.then((outcome) => {
+      if (
+        outcome === "injected" &&
+        managed.projection.appendGuide(item.commandId, item.text, item.attachments)
+      ) {
+        void managed.transcript
+          .appendPrompt(item.commandId, item.transcriptBlocks, { steer: true })
+          .catch(() => {});
+        this.publish(managed);
+        return;
+      }
+      // promptRequired / 失败：输入仍归 Host，排队并在会话空闲时启动为下一 turn。
+      managed.queuedPrompts.push(item);
+    });
+    managed.steersInFlight.add(settled);
+    try {
+      await settled;
+    } finally {
+      managed.steersInFlight.delete(settled);
+    }
+    this.drainQueue(managed);
+  }
+
+  /** 仅在会话完全空闲（turn 已结算且无活动命令）时启动排队输入；startTurn 同步占用会话，避免重复启动。 */
+  private drainQueue(managed: ManagedAcpSession): void {
+    if (managed.crashed || managed.closing || !managed.turnSettled || managed.activeCommandId)
+      return;
+    const next = managed.queuedPrompts.shift();
+    if (next) void this.startTurn(managed, next).catch(() => {});
+  }
+
+  private async startTurn(managed: ManagedAcpSession, item: QueuedAcpPrompt): Promise<void> {
+    // 同步占用：beginTurn 与 activeCommandId 先于任何 await，防止并发 drain 重复开 turn。
+    managed.acceptedCommandIds.add(item.commandId);
+    managed.projection.beginTurn(item.commandId, item.text, item.attachments);
+    managed.activeCommandId = item.commandId;
     managed.turnSettled = false;
+    await managed.transcript.appendPrompt(item.commandId, item.transcriptBlocks);
     // ACP Agent 可以始终不发送 session_info_update；首轮接纳时用用户输入替换占位标题。
     // task index 的 sync 会保留手动重命名，因此取其返回值作为投影的最终标题。
     const firstInputTitle =
       managed.meta.title === "New session" && !managed.meta.titleOverridden
-        ? deriveSessionTitle(target.text.trim(), []) || target.attachments?.[0]?.fileName
+        ? deriveSessionTitle(item.text.trim(), []) || item.attachments?.[0]?.fileName
         : undefined;
     managed.meta = {
       ...managed.meta,
@@ -383,8 +443,19 @@ export class AcpRuntimeCoordinator {
       throw error;
     }
     this.publish(managed);
-    void this.runPrompt(managed, target.commandId, content);
-    return "accepted";
+    void this.runPrompt(managed, item.commandId, item.content);
+  }
+
+  /** turn 结束后：先应用被延后的配置（最后一次请求为准），再启动排队的输入。 */
+  private async afterTurn(managed: ManagedAcpSession): Promise<void> {
+    const deferred = managed.deferredConfig;
+    managed.deferredConfig = {};
+    const target = { ...managed.meta, taskId: managed.meta.taskId };
+    if (deferred.model) await this.setModel({ ...target, value: deferred.model }).catch(() => {});
+    if (deferred.thought)
+      await this.setThinkingLevel({ ...target, value: deferred.thought }).catch(() => {});
+    if (deferred.modeId) await this.setMode({ ...target, value: deferred.modeId }).catch(() => {});
+    this.drainQueue(managed);
   }
 
   snapshot(target: AcpWorkspaceTarget & { taskId: string }): ConversationSnapshot | null {
@@ -535,7 +606,15 @@ export class AcpRuntimeCoordinator {
   async setThinkingLevel(target: AcpWorkspaceTarget & { taskId: string; value: string }) {
     const managed = this.active.get(sessionKey(target, target.taskId));
     if (!managed) throw new Error("ACP session is not loaded");
-    const levels = await managed.connection.setThinkingLevel(target.value);
+    let levels: Awaited<ReturnType<AcpConnection["setThinkingLevel"]>>;
+    try {
+      levels = await managed.connection.setThinkingLevel(target.value);
+    } catch (error) {
+      // 运行中 Agent 拒绝即时切换：记为延后变更，turn 结束后应用，不丢弃用户选择。
+      if (!managed.connection.running) throw error;
+      managed.deferredConfig.thought = target.value;
+      return managed.connection.thinkingLevels();
+    }
     managed.projection.setThinkingLevels(levels);
     managed.meta = { ...managed.meta, thoughtLevel: target.value, updatedAt: Date.now() };
     await this.taskIndex.syncTaskMeta({ meta: managed.meta });
@@ -557,6 +636,11 @@ export class AcpRuntimeCoordinator {
       managed.projection.setModes(modes);
       this.publish(managed);
     } catch (error) {
+      // 运行中切换被拒：延后到 turn 结束再确认，而不是关闭仍在工作的会话。
+      if (managed.connection.running) {
+        managed.deferredConfig.modeId = target.value;
+        return;
+      }
       // Agent 调用已开始，超时或索引写入失败都无法保证运行态与恢复意图一致。
       await this.close(target).catch(() => {});
       managed.projection.markUnavailable(
@@ -571,7 +655,14 @@ export class AcpRuntimeCoordinator {
   async setModel(target: AcpWorkspaceTarget & { taskId: string; value: string }): Promise<void> {
     const managed = this.active.get(sessionKey(target, target.taskId));
     if (!managed) throw new Error("ACP session is not loaded");
-    const result = await managed.connection.setModel(target.value);
+    let result: Awaited<ReturnType<AcpConnection["setModel"]>>;
+    try {
+      result = await managed.connection.setModel(target.value);
+    } catch (error) {
+      if (!managed.connection.running) throw error;
+      managed.deferredConfig.model = target.value;
+      return;
+    }
     managed.projection.setModelOptions(result.models);
     managed.projection.setThinkingLevels(result.thinkingLevels);
     managed.meta = {
@@ -688,6 +779,9 @@ export class AcpRuntimeCoordinator {
   ): Promise<void> {
     try {
       const result = await managed.connection.prompt(commandId, content);
+      // 修复原因：回合结束时引导请求可能仍在途，其结果决定消息是并入本回合还是排队；
+      // 先等它落定再 finishTurn，否则回退排队会与回合收尾竞争，导致重复或丢失。
+      if (managed.steersInFlight.size) await Promise.allSettled(managed.steersInFlight);
       if (managed.meta.runtimeId && !managed.crashed)
         this.authStates.markAuthenticated(managed.meta.runtimeId);
       await this.finishTurn(
@@ -726,6 +820,7 @@ export class AcpRuntimeCoordinator {
     };
     await this.taskIndex.syncTaskMeta({ meta: managed.meta }).catch(() => {});
     this.publish(managed);
+    void this.afterTurn(managed).catch(() => {});
   }
 
   private publish(managed: ManagedAcpSession): void {
