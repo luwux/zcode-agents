@@ -105,13 +105,13 @@ back; nothing falls back to BYOK or another runtime.
 
 ## Tests
 
-| Suite                                            | Command                                                                                                     | Network                                             |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| Unit (fake ACP agent, env, registry, auth, gate) | `cd packages/services && node --import tsx --test test/*.test.ts`                                           | none                                                |
-| Replay proxy                                     | `node --test scripts/acp-replay/replay-core.test.mjs`                                                       | none                                                |
-| Offline replay e2e (real CLIs)                   | `node scripts/acp-replay/run-replay-e2e.mjs --artifacts /tmp/replay`                                        | install step only; tests run loopback-only on Linux |
-| Live OpenRouter                                  | `cd packages/services && OPENROUTER_API_KEY=… node --import tsx --test test/e2e/builtinRuntimesLive.e2e.ts` | openrouter.ai                                       |
-| Desktop CDP                                      | see `scripts/acp-cdp/README.md`                                                                             | replay: none; live: openrouter.ai                   |
+| Suite                                                                                           | Command                                                                                             | Network                                             |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Unit (fake ACP agent, env, registry, auth, gate)                                                | `cd packages/services && node --import tsx --test test/*.test.ts`                                   | none                                                |
+| Replay proxy                                                                                    | `node --test scripts/acp-replay/replay-core.test.mjs`                                               | none                                                |
+| Offline replay e2e (real CLIs)                                                                  | `node scripts/acp-replay/run-replay-e2e.mjs --artifacts /tmp/replay`                                | install step only; tests run loopback-only on Linux |
+| Live OpenRouter (website, harness and internet research; random 1-in-5 rejections in ask modes) | `cd packages/services && OPENROUTER_API_KEY=… node --import tsx --test test/e2e/live/*.live.e2e.ts` | openrouter.ai, github.com                           |
+| Desktop CDP                                                                                     | see `scripts/acp-cdp/README.md`                                                                     | replay: none; live: openrouter.ai                   |
 
 CI: `.github/workflows/acp-runtimes.yml` (the live job uses the `OPENROUTER_API_KEY` repository secret and
 writes the run cost to the job summary).
