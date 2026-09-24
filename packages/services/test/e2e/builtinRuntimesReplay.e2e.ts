@@ -10,13 +10,10 @@
  * loopback-only network namespace). Skips unless CODEZ_E2E_REPLAY=1 and CODEZ_ACP_RUNTIMES_DIR is set.
  */
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
+import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { AcpRuntimeCoordinator } from "../../src/agent-runtime/acpRuntimeCoordinator.js";
 import { saveAgentConfig } from "../../src/agent-runtime/builtin/agentConfigRegistry.js";
@@ -31,13 +28,14 @@ import {
   sandboxEnvForBypass,
   type JudgeDecision,
 } from "./permissionJudge.js";
+import {
+  makeWorkspace,
+  replayDir,
+  replaySkip as skip,
+  startProxy,
+  waitFor,
+} from "./replayHarness.js";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const replayDir = resolve(here, "../../../../scripts/acp-replay");
-const enabled = process.env.CODEZ_E2E_REPLAY === "1" && Boolean(process.env.CODEZ_ACP_RUNTIMES_DIR);
-const skip = enabled
-  ? false
-  : "set CODEZ_E2E_REPLAY=1 and CODEZ_ACP_RUNTIMES_DIR (use run-replay-e2e.mjs)";
 const artifacts = process.env.CODEZ_E2E_ARTIFACTS;
 
 interface Fixture {
@@ -170,60 +168,9 @@ const CASES: Case[] = [
 // Codex 默认 "agent" 模式由 Guardian 模型代为审批；回放代理无法扮演该审查模型，由 live 测试覆盖。
 test(
   "codex agent (Guardian auto-review) mode",
-  { skip: "Guardian review needs a real model; covered by builtinRuntimesLive.e2e.ts" },
+  { skip: "Guardian review needs a real model; covered by the live tests (test/e2e/live)" },
   () => {},
 );
-
-async function startProxy(fixture: string, workspace: string, log: string) {
-  const child = spawn(
-    process.execPath,
-    [
-      join(replayDir, "replay-proxy.mjs"),
-      "--fixture",
-      join(replayDir, "fixtures", fixture),
-      "--workspace",
-      workspace,
-      "--log",
-      log,
-      "--speed",
-      "50",
-    ],
-    { stdio: ["ignore", "pipe", "inherit"] },
-  );
-  const line = await new Promise<string>((resolveLine, reject) => {
-    const rl = createInterface({ input: child.stdout! });
-    rl.once("line", resolveLine);
-    child.once("exit", (code) => reject(new Error(`replay proxy exited ${code}`)));
-  });
-  return { child, url: (JSON.parse(line) as { url: string }).url };
-}
-
-async function waitFor(predicate: () => boolean | Promise<boolean>, ms: number, label: string) {
-  const deadline = Date.now() + ms;
-  while (!(await predicate())) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
-
-async function makeWorkspace(root: string): Promise<string> {
-  const workspace = join(root, "workspace");
-  await mkdir(workspace, { recursive: true });
-  await writeFile(
-    join(workspace, "README.md"),
-    "# Replay workspace\n\nThrowaway repository for replay tests.\n",
-  );
-  await writeFile(
-    join(workspace, "package.json"),
-    `${JSON.stringify({ name: "replay-workspace", private: true, version: "0.0.0" }, null, 2)}\n`,
-  );
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
-  const identity = ["-c", "user.email=replay@example.invalid", "-c", "user.name=Replay"];
-  git("init", "-q");
-  git(...identity, "add", ".");
-  git(...identity, "commit", "-qm", "init");
-  return workspace;
-}
 
 for (const testCase of CASES) {
   test(testCase.name, { skip, timeout: 240_000 }, async () => {

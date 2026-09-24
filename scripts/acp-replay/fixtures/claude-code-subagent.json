@@ -1,0 +1,83 @@
+{
+  "source": "claude-code",
+  "wire": "anthropic-messages",
+  "model": "claude-opus-5",
+  "note": "Hand-written native subagent fixture. Claude Code 2.1.280 launches the Agent asynchronously: turn 0 = parent prompt (Agent call); turn 1 = subagent's first request (read-only Bash), then the parent's continuation after the async launch and the subagent's final answer (their relative order may race, the test only asserts structure); turn 2 = the parent's task-notification follow-up.",
+  "turns": [
+    {
+      "user": { "text": "Delegate counting the files to a subagent.", "t_ms": 0 },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "message_id": "msg_sub_1",
+          "text": "Delegating to a subagent."
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 20,
+          "message_id": "msg_sub_1",
+          "call_id": "toolu_agent_01",
+          "name": "Agent",
+          "input": {
+            "description": "Count files",
+            "prompt": "Count the files in the workspace root and report the number.",
+            "subagent_type": "general-purpose"
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 30,
+          "call_id": "toolu_agent_01",
+          "is_error": false,
+          "output": ""
+        }
+      ]
+    },
+    {
+      "user": { "text": "Count the files in the workspace root and report the number.", "t_ms": 0 },
+      "events": [
+        {
+          "kind": "tool_call",
+          "t_ms": 10,
+          "message_id": "msg_child_1",
+          "call_id": "toolu_child_01",
+          "name": "Bash",
+          "input": { "command": "ls", "description": "List files" }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 20,
+          "call_id": "toolu_child_01",
+          "is_error": false,
+          "output": ""
+        },
+        {
+          "kind": "text",
+          "t_ms": 30,
+          "message_id": "msg_parent_2",
+          "text": "Launched the subagent."
+        },
+        { "kind": "end_response", "t_ms": 31 },
+        {
+          "kind": "text",
+          "t_ms": 40,
+          "message_id": "msg_child_2",
+          "text": "The workspace root has 2 files."
+        },
+        { "kind": "end_response", "t_ms": 41 }
+      ]
+    },
+    {
+      "user": { "text": "<task-notification>", "t_ms": 0 },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "message_id": "msg_parent_3",
+          "text": "The subagent reported the file count."
+        }
+      ]
+    }
+  ]
+}

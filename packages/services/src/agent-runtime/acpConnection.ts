@@ -6,13 +6,15 @@ import {
   PROTOCOL_VERSION,
   ndJsonStream,
   type Client,
+  type ClientCapabilities,
   type ContentBlock,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type InitializeResponse,
   type McpServer,
   type PromptResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
-  type SessionNotification,
   type SessionConfigOption,
   type SessionModeState,
 } from "@agentclientprotocol/sdk";
@@ -25,6 +27,12 @@ import {
   readAcpProjectMemoryIndex,
 } from "#src/agent-runtime/acpProjectMemory.js";
 import { AcpHostCapabilities } from "#src/agent-runtime/acpHostCapabilities.js";
+import type { AcpUpdateNotification } from "#src/agent-runtime/acpExtensionSchemas.js";
+import {
+  AcpChildSessionRegistry,
+  carryAcpExtensionUpdates,
+  unwrapAcpExtensionUpdate,
+} from "#src/agent-runtime/acpExtensionStream.js";
 
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const SESSION_SETUP_TIMEOUT_MS = 60_000;
@@ -51,10 +59,28 @@ export interface AcpLaunchConfig {
 }
 
 export interface AcpSessionObserver {
-  onUpdate(notification: SessionNotification): void | Promise<void>;
+  /** sessionId 为根会话或已宣告的子会话；扩展 update 已解包并经 zod 校验。 */
+  onUpdate(notification: AcpUpdateNotification): void | Promise<void>;
   requestPermission(request: RequestPermissionRequest): Promise<RequestPermissionResponse>;
+  /** form 模式问答；未实现时 Host 以 decline 应答。 */
+  requestElicitation?(request: CreateElicitationRequest): Promise<CreateElicitationResponse>;
   onExit?(code: number | null, signal: NodeJS.Signals | null): void;
 }
+
+/**
+ * 声明的扩展能力：原生子会话（ACP RFD `subagents` 与 AIR `nativeSubagentSessions`）、AIR 后台任务与 form 问答。
+ * SDK 1.4 的 ClientCapabilities 没有 `subagents` 字段，按 wire 形状断言；SDK 发送时原样透传。
+ */
+const EXTENDED_CLIENT_CAPABILITIES = {
+  fs: { readTextFile: true, writeTextFile: true },
+  terminal: true,
+  auth: { terminal: true },
+  elicitation: { form: {} },
+  subagents: {},
+  _meta: {
+    jetbrains: { air: { version: 1, capabilities: ["nativeSubagentSessions", "asyncTasks"] } },
+  },
+} as ClientCapabilities;
 
 export interface AcpThinkingLevel {
   value: string;
@@ -113,7 +139,7 @@ export class AcpConnection {
   private closed = false;
   private configOptions: SessionConfigOption[] = [];
   private modes: SessionModeState | null = null;
-  private readonly pendingPermissionCancels = new Set<() => void>();
+  private readonly pendingInteractionCancels = new Set<() => void>();
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
@@ -121,6 +147,7 @@ export class AcpConnection {
     readonly initializeResponse: InitializeResponse,
     private readonly config: AcpLaunchConfig,
     private readonly hostCapabilities: AcpHostCapabilities,
+    private readonly children: AcpChildSessionRegistry,
   ) {}
 
   static async open(config: AcpLaunchConfig, observer: AcpSessionObserver): Promise<AcpConnection> {
@@ -137,11 +164,16 @@ export class AcpConnection {
         child.once("spawn", resolve);
         child.once("error", reject);
       });
-      const stream = ndJsonStream(
-        Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-        Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-      );
       let active: AcpConnection | null = null;
+      const children = new AcpChildSessionRegistry(() => active?.sessionId ?? null);
+      // SDK 1.4 拒收 subagent_*/async_task_*：先在线序上改写为载体，再交给 SDK。
+      const stream = carryAcpExtensionUpdates(
+        ndJsonStream(
+          Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+          Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+        ),
+        children,
+      );
       const hostCapabilities = new AcpHostCapabilities(
         config.cwd,
         config.memory?.workspaceIdentity,
@@ -153,17 +185,28 @@ export class AcpConnection {
       );
       const client: Client = {
         async sessionUpdate(notification) {
-          if (active?.sessionId && notification.sessionId !== active.sessionId) return;
-          if (notification.update.sessionUpdate === "config_option_update")
-            active?.updateConfigOptions(notification.update.configOptions);
-          if (notification.update.sessionUpdate === "current_mode_update" && active?.modes)
-            active.modes = { ...active.modes, currentModeId: notification.update.currentModeId };
-          await observer.onUpdate(notification);
+          // 修复：原先只接纳根 sessionId，原生子智能体的全部更新被丢弃；现在接纳已宣告的子会话，其余仍丢弃。
+          if (active?.sessionId && !children.accepts(notification.sessionId)) return;
+          const update = unwrapAcpExtensionUpdate(notification.update);
+          if (!update) return;
+          const fromRoot = !active?.sessionId || notification.sessionId === active.sessionId;
+          // 子会话的配置/模式属于子 Agent 自身，不能改写根会话的已确认配置。
+          if (fromRoot && update.sessionUpdate === "config_option_update")
+            active?.updateConfigOptions(update.configOptions);
+          if (fromRoot && update.sessionUpdate === "current_mode_update" && active?.modes)
+            active.modes = { ...active.modes, currentModeId: update.currentModeId };
+          await observer.onUpdate({ sessionId: notification.sessionId, update });
         },
         requestPermission(request) {
           return (
             active?.resolvePermissionRequest(request, observer) ??
             Promise.resolve({ outcome: { outcome: "cancelled" } })
+          );
+        },
+        createElicitation(request) {
+          return (
+            active?.resolveElicitationRequest(request, observer) ??
+            Promise.resolve({ action: "cancel" })
           );
         },
         ...(config.textOnly
@@ -183,13 +226,7 @@ export class AcpConnection {
         connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
           // auth.terminal：订阅登录由 Host 以相同 argv/env 另起 CLI 登录进程完成（ACP terminal auth）。
-          clientCapabilities: config.textOnly
-            ? {}
-            : {
-                fs: { readTextFile: true, writeTextFile: true },
-                terminal: true,
-                auth: { terminal: true },
-              },
+          clientCapabilities: config.textOnly ? {} : EXTENDED_CLIENT_CAPABILITIES,
           clientInfo: { name: "CodeZ", version: "1" },
         }),
         HANDSHAKE_TIMEOUT_MS,
@@ -197,7 +234,14 @@ export class AcpConnection {
       );
       if (initializeResponse.protocolVersion !== PROTOCOL_VERSION)
         throw new Error(`Unsupported ACP protocol version ${initializeResponse.protocolVersion}`);
-      active = new AcpConnection(child, connection, initializeResponse, config, hostCapabilities);
+      active = new AcpConnection(
+        child,
+        connection,
+        initializeResponse,
+        config,
+        hostCapabilities,
+        children,
+      );
       child.once("exit", (code, signal) => {
         active?.markExited();
         void hostCapabilities.close().catch(() => {});
@@ -225,6 +269,21 @@ export class AcpConnection {
 
   get sessionId(): string | null {
     return this.nativeSessionId;
+  }
+
+  /** 该 sessionId 是否为 Agent 已宣告的子会话（非根）。 */
+  isChildSession(sessionId: string): boolean {
+    return sessionId !== this.nativeSessionId && this.children.isChild(sessionId);
+  }
+
+  /** 调用 Agent 的扩展请求（`_session/async_task/stop`、`_lody/subagents/cancel`）。 */
+  async extRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
+    this.requireSession();
+    return withTimeout(
+      this.connection.request<unknown, Record<string, unknown>>(method, params),
+      SESSION_SETUP_TIMEOUT_MS,
+      `ACP ${method}`,
+    );
   }
 
   thinkingLevels(): AcpThinkingLevel[] {
@@ -427,7 +486,7 @@ export class AcpConnection {
     const sessionId = this.requireSession();
     if (!this.inFlight) return;
     await this.connection.cancel({ sessionId });
-    this.cancelPendingPermissions();
+    this.cancelPendingInteractions();
     try {
       await withTimeout(this.inFlight, CANCEL_TIMEOUT_MS, "ACP cancellation settlement");
     } catch (error) {
@@ -439,7 +498,7 @@ export class AcpConnection {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.cancelPendingPermissions();
+    this.cancelPendingInteractions();
     await this.hostCapabilities.close();
     const sessionId = this.nativeSessionId;
     if (sessionId && this.initializeResponse.agentCapabilities?.sessionCapabilities?.close) {
@@ -472,34 +531,61 @@ export class AcpConnection {
     observer: AcpSessionObserver,
   ): Promise<RequestPermissionResponse> {
     const cancelled: RequestPermissionResponse = { outcome: { outcome: "cancelled" } };
-    if (this.closed || !this.nativeSessionId || request.sessionId !== this.nativeSessionId)
+    // 子智能体的权限请求使用已宣告的子 sessionId；未知或已终结的子会话一律 cancelled。
+    if (
+      this.closed ||
+      !this.nativeSessionId ||
+      !this.children.acceptsInteraction(request.sessionId)
+    )
       return cancelled;
+    const response = await this.raceWithClose(observer.requestPermission(request), cancelled);
+    const outcome = response.outcome;
+    if (
+      outcome.outcome === "selected" &&
+      !request.options.some((option) => option.optionId === outcome.optionId)
+    )
+      return cancelled;
+    return response;
+  }
+
+  private async resolveElicitationRequest(
+    request: CreateElicitationRequest,
+    observer: AcpSessionObserver,
+  ): Promise<CreateElicitationResponse> {
+    const sessionId = "sessionId" in request ? request.sessionId : undefined;
+    if (this.closed || !this.nativeSessionId) return { action: "cancel" };
+    // 只声明了 form 模式；URL/自定义模式及非会话作用域的请求明确拒绝，而不是悬挂。
+    if (
+      request.mode !== "form" ||
+      typeof sessionId !== "string" ||
+      !this.children.acceptsInteraction(sessionId) ||
+      !observer.requestElicitation
+    )
+      return { action: "decline" };
+    return this.raceWithClose(observer.requestElicitation(request), { action: "cancel" });
+  }
+
+  /** 取消、断线或进程退出时，等待中的交互以给定结果收口，不自动允许。 */
+  private async raceWithClose<T>(pending: Promise<T>, onClose: T): Promise<T> {
     let cancel: () => void = () => {};
-    const closed = new Promise<RequestPermissionResponse>((resolve) => {
-      cancel = () => resolve(cancelled);
+    const closed = new Promise<T>((resolve) => {
+      cancel = () => resolve(onClose);
     });
-    this.pendingPermissionCancels.add(cancel);
+    this.pendingInteractionCancels.add(cancel);
     try {
-      const response = await Promise.race([observer.requestPermission(request), closed]);
-      const outcome = response.outcome;
-      if (
-        outcome.outcome === "selected" &&
-        !request.options.some((option) => option.optionId === outcome.optionId)
-      )
-        return cancelled;
-      return response;
+      return await Promise.race([pending, closed]);
     } finally {
-      this.pendingPermissionCancels.delete(cancel);
+      this.pendingInteractionCancels.delete(cancel);
     }
   }
 
-  private cancelPendingPermissions(): void {
-    for (const cancel of this.pendingPermissionCancels) cancel();
-    this.pendingPermissionCancels.clear();
+  private cancelPendingInteractions(): void {
+    for (const cancel of this.pendingInteractionCancels) cancel();
+    this.pendingInteractionCancels.clear();
   }
 
   private markExited(): void {
     this.closed = true;
-    this.cancelPendingPermissions();
+    this.cancelPendingInteractions();
   }
 }

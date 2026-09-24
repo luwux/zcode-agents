@@ -3,9 +3,10 @@ import { getZCodeDataRootDir } from "#src/paths.js";
 import { AcpConnection, type AcpSessionObserver } from "#src/agent-runtime/acpConnection.js";
 import { AcpConversationProjection } from "#src/agent-runtime/acpConversationProjection.js";
 import {
+  createAcpPendingInteractions,
   createManagedAcpSession,
+  type AcpPendingInteractions,
   type ManagedAcpSession,
-  type PendingPermission,
 } from "#src/agent-runtime/acpManagedSession.js";
 import {
   isolateAcpNativeAutoMemory,
@@ -36,7 +37,7 @@ export async function createAcpManagedSession(input: {
   makeObserver: (
     projection: AcpConversationProjection,
     transcript: AcpTranscriptStore,
-    pending: Map<string, PendingPermission>,
+    pending: AcpPendingInteractions,
     current: () => ManagedAcpSession | null,
   ) => AcpSessionObserver;
 }): Promise<ManagedAcpSession> {
@@ -46,9 +47,9 @@ export async function createAcpManagedSession(input: {
     input.taskId,
     getZCodeDataRootDir(),
   );
-  const pendingPermissions = new Map<string, PendingPermission>();
+  const pending = createAcpPendingInteractions();
   let managed: ManagedAcpSession | null = null;
-  const observer = input.makeObserver(projection, transcript, pendingPermissions, () => managed);
+  const observer = input.makeObserver(projection, transcript, pending, () => managed);
   const launch = await input.resolveLaunch(input.spec);
   const isolated = isolateAcpNativeAutoMemory(input.spec, launch.env ?? process.env, launch.args);
   // 闸门覆盖 spawn → initialize → session/new；模型/模式设置在已建立的会话上，不占名额。
@@ -111,7 +112,7 @@ export async function createAcpManagedSession(input: {
       projection,
       transcript,
       acceptedCommandIds: new Set(),
-      pendingPermissions,
+      pending,
     });
     return managed;
   } catch (error) {

@@ -30,6 +30,15 @@ test("fixtures split into one model response per CLI request", () => {
     }
 });
 
+test("end_response keeps consecutive text-only responses separate (native subagents)", () => {
+  const turns = buildSegments(load("claude-code-subagent.json"));
+  assert.deepEqual(
+    turns.map((turn) => turn.map((segment) => segment.stop)),
+    [["tool_use", "end_turn"], ["tool_use", "end_turn", "end_turn"], ["end_turn"]],
+  );
+  assert.equal(turns[1][1].events[0].text, "Launched the subagent.");
+});
+
 test("cursor advances within a turn on tool results and starts a turn on a user prompt", () => {
   const cursor = new ReplayCursor(load("codex.json"));
   assert.deepEqual([cursor.advance(false).turn, cursor.advance(true).segment], [0, 1]);
