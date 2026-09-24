@@ -149,7 +149,7 @@ pnpm bundle:desktop -- --help
 
 默认产出正式 CodeZ 的 macOS arm64 包，输出目录为 `packages/desktop/dist/`。显式设置 `ZCODE_ENV=test` 或 `ZCODE_PREVIEW_IDENTITY=1` 可构建 Preview。`--os` 支持 `mac`、`win`、`linux`，`--arch` 支持 `x64`、`arm64`；实际打包与签名需要目标平台对应的工具和配置。
 
-缺失的内置插件资产在本机打包时从已安装的 `/Applications/ZCode.app/Contents/Resources/glm/packages` 读取；其他平台可通过 `CODEZ_OFFICIAL_PLUGIN_SOURCE` 指定同结构的插件目录。构建会拒绝缺失必需插件的包，导入的插件文件不进入 Git。分享包含第三方受限资产的安装包前需确认相应授权。
+缺失的内置插件资产在本机打包时从已安装的 `/Applications/ZCode.app/Contents/Resources/glm/packages` 读取；其他平台可通过 `CODEZ_OFFICIAL_PLUGIN_SOURCE` 指定同结构的插件目录。官方 ZCode 3.14.3 起安装包只带 browser-use-plugin 与 node-repl-host，其余闭源插件（documents、pdf、zcode-cua 等）缺失时构建告警并跳过，打出的包不含这些插件；设置 `CODEZ_REQUIRE_OFFICIAL_PLUGINS=1` 可恢复缺失即失败。导入的插件文件不进入 Git。分享包含第三方受限资产的安装包前需确认相应授权。
 
 安装：双击打开产物 DMG，将 CodeZ 拖入"应用程序"。本地构建未签名，首次打开若被 macOS 拦截，执行：
 

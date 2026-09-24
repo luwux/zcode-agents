@@ -161,6 +161,12 @@ const localOfficialPluginSource =
   process.env.CODEZ_OFFICIAL_PLUGIN_SOURCE ||
   (process.platform === "darwin" ? "/Applications/ZCode.app/Contents/Resources/glm/packages" : "");
 
+// 修复原因：官方 ZCode 3.14.3 的安装包只带 browser-use-plugin / node-repl-host / bundled-skills，
+// documents、pdf、zcode-cua 等闭源插件既不在开源仓库也不在新版安装包里，按旧规则会让本机打包直接失败。
+// 运行时 seed（bootstrap bundled-plugins.ts 的 resolveFilesystemPluginRoot）找不到插件目录时本就跳过，
+// 因此缺失的闭源插件只告警并跳过；需要严格校验时设置 CODEZ_REQUIRE_OFFICIAL_PLUGINS=1。
+const requireAllOfficialPlugins = process.env.CODEZ_REQUIRE_OFFICIAL_PLUGINS === "1";
+
 function resolveOfficialPluginSource(plugin) {
   const repositoryPath = resolve(repoRoot, plugin.relativePath);
   if (existsSync(resolve(repositoryPath, ".zcode-plugin", "plugin.json"))) {
@@ -172,9 +178,11 @@ function resolveOfficialPluginSource(plugin) {
   if (sourcePath && existsSync(resolve(sourcePath, ".zcode-plugin", "plugin.json"))) {
     return sourcePath;
   }
-  throw new Error(
-    `[prepare:agent-bundle] missing ${plugin.stagedPath}; set CODEZ_OFFICIAL_PLUGIN_SOURCE to a locally installed plugin packages directory`,
-  );
+  const message = `[prepare:agent-bundle] missing ${plugin.stagedPath}; set CODEZ_OFFICIAL_PLUGIN_SOURCE to a locally installed plugin packages directory`;
+  // 仓库内有运行时产物要求的插件（node-repl-host 等）缺失说明构建本身有问题，始终报错。
+  if (requireAllOfficialPlugins || plugin.requiresRuntime) throw new Error(message);
+  console.warn(`${message} (skipped: not shipped by the installed ZCode release)`);
+  return null;
 }
 // 随 CLI 内置的技能包（不是插件）：bootstrap 的 resolveBundledSkillRoots 沿官方插件同款候选目录
 // 在 zcode.cjs 旁找 packages/bundled-skills 并原地读取。漏 stage 它，桌面包的 /workflow 会展开成
@@ -302,6 +310,7 @@ function stageOfficialPlugins() {
   for (const plugin of officialPluginPackages) {
     // 仅在本机打包时读取已有安装资产；受限插件文件不进入 Git，也不读取其用户配置。
     const sourceRoot = resolveOfficialPluginSource(plugin);
+    if (!sourceRoot) continue;
     const manifestPath = resolve(sourceRoot, ".zcode-plugin", "plugin.json");
     if (!existsSync(manifestPath)) {
       throw new Error(`[prepare:agent-bundle] missing official plugin manifest: ${manifestPath}`);
