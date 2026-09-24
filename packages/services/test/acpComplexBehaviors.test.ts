@@ -96,7 +96,15 @@ test("ACP complex behaviors round-trip through connection, coordinator and V4 br
 
     // 子智能体：spawn → 子工具 → 子权限（经 V4 resolveInteraction）→ 终态。
     await prompt("subagent");
-    await waitFor(() => (snap()?.pendingInteractions.length ?? 0) > 0, "child permission");
+    // SDK 的 request 处理链比 notification 短：权限可能先于 spawn 被投影应用，origin 在 spawn 应用后的
+    // 下一帧解析出来（AcpInteractionBook 在生成 snapshot 时按登记表解析），这里等待该最终态。
+    await waitFor(
+      () =>
+        snap()?.pendingInteractions.some(
+          (item) => item.payload.kind === "permission" && item.payload.origin !== undefined,
+        ) === true,
+      "child permission with origin",
+    );
     const pending = snap()!.pendingInteractions[0]!;
     assert.equal(
       pending.payload.kind === "permission" && pending.payload.origin?.childSessionId,

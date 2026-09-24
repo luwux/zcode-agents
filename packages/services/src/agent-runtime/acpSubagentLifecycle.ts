@@ -159,6 +159,16 @@ export function applyLodyTask<P extends AcpSubagentHost>(
   );
 }
 
+/** Claude 异步启动的子智能体：宿主行与 subagent 行标记为后台运行（不改变其状态）。 */
+export function markSubagentBackgrounded<P extends AcpSubagentHost>(entry: AcpSubagentEntry<P>) {
+  const parent = entry.parent.log;
+  for (const rowId of [entry.subagentRowId, entry.hostRowId]) {
+    const row = parent.at(rowId);
+    if ((row?.kind === "subagent" || row?.kind === "toolCall") && row.backgrounded !== true)
+      parent.replace({ ...row, backgrounded: true, workId: entry.virtualId });
+  }
+}
+
 /** 由持有宿主行的父投影收口子会话；终态单调，摘要取子会话最后一段回复。 */
 export function settleSubagent<P extends AcpSubagentHost>(
   registry: AcpSubagentRegistry<P>,

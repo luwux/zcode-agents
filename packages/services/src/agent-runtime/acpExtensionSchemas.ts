@@ -151,6 +151,25 @@ export function readClaudeCodeToolName(meta: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * claude-agent-acp 原生子会话模式下的 Agent/Task 控制更新（`_meta.claudeCode.subagent` 或工具名）。
+ * 异步启动的回执携带 `toolResponse{isAsync, agentId}`，agentId 即子会话 id。
+ */
+export function readClaudeCodeSubagentControl(meta: unknown): {
+  control: boolean;
+  asyncAgentId?: string;
+} {
+  const claude = record(record(meta)?.claudeCode);
+  const toolName = claude?.toolName;
+  const control = claude?.subagent === true || toolName === "Agent" || toolName === "Task";
+  const response = record(claude?.toolResponse);
+  const agentId = response?.isAsync === true ? response.agentId : undefined;
+  return {
+    control,
+    ...(control && typeof agentId === "string" && agentId ? { asyncAgentId: agentId } : {}),
+  };
+}
+
 /** AIR：`_meta.jetbrains.air.asyncTasks.backgrounded === true` 表示该 Bash 已转入后台。 */
 export function readAirBackgrounded(meta: unknown): boolean {
   return record(record(record(record(meta)?.jetbrains)?.air)?.asyncTasks)?.backgrounded === true;

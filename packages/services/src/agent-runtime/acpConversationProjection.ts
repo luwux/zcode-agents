@@ -24,6 +24,7 @@ import {
   parseAcpExtensionUpdate,
   readAcpGoalMeta,
   readAirBackgrounded,
+  readClaudeCodeSubagentControl,
   readLodyTaskMeta,
   type AcpExtensionUpdate,
   type AcpSessionUpdate,
@@ -45,6 +46,7 @@ import {
 import {
   applyLodyTask,
   lodyTaskKey,
+  markSubagentBackgrounded,
   settleSubagent,
   spawnNativeSubagent,
 } from "#src/agent-runtime/acpSubagentLifecycle.js";
@@ -311,6 +313,20 @@ export class AcpConversationProjection {
     const status = mapAcpToolStatus(update.status);
     const existingRow = this.log.at(this.rowByToolCallId.get(update.toolCallId));
     const existing = existingRow?.kind === "toolCall" ? existingRow : undefined;
+    const control = readClaudeCodeSubagentControl(update._meta);
+    // 修复：原生子会话模式下适配器仍会把 Agent 的异步启动回执作为 tool_call_update 发来（无先前 tool_call）；
+    // 按普通工具建行会在回合结束时被误判为“未收到终态”的失败 Agent 行。宿主行已由 subagent_spawned 合成，
+    // 这里只把对应子会话标记为后台运行；失败回退（tool_call + failed）仍按普通工具行展示。
+    if (
+      !existing &&
+      update.sessionUpdate === "tool_call_update" &&
+      control.control &&
+      update.status !== "failed"
+    ) {
+      const entry = control.asyncAgentId ? this.registry.get(control.asyncAgentId) : undefined;
+      if (entry) markSubagentBackgrounded(entry);
+      return;
+    }
     const turnId = existing?.turnId ?? this.lifecycleTurn(at, null);
     if (!turnId) return;
     const identity = resolveAcpToolIdentity(update, this.toolIdentities.get(update.toolCallId));

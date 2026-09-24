@@ -324,3 +324,49 @@ test("Pi lody task lifecycle pairs a subagent row with the Pi subagent tool row"
   assert.equal(ended?.kind === "subagent" && ended.summaryText, "cancelled by user");
   assert.equal(projection.snapshot().backgroundWorks.length, 0);
 });
+
+test("Claude async Agent launch receipt marks the child backgrounded without a phantom row", () => {
+  // claude-agent-acp 0.81.2 + Claude Code 2.1.280 实录：原生模式下仍发送无前置 tool_call 的控制回执。
+  const projection = new AcpConversationProjection("task");
+  projection.beginTurn("p1", "delegate", undefined, 1);
+  projection.applyUpdate(
+    {
+      sessionId: ROOT,
+      update: {
+        sessionUpdate: "subagent_spawned",
+        subagentSessionId: "a55b64c6621632ee3",
+        name: "Count files",
+        task: "Count the files",
+      },
+    },
+    2,
+  );
+  projection.applyUpdate(
+    {
+      sessionId: ROOT,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "toolu_agent_01",
+        _meta: {
+          claudeCode: {
+            toolName: "Agent",
+            toolResponse: { isAsync: true, status: "async_launched", agentId: "a55b64c6621632ee3" },
+          },
+        },
+      },
+    },
+    3,
+  );
+  projection.finishTurn({ stopReason: "end_turn" }, 4);
+  const rows = rowsOf(projection);
+  assert.deepEqual(
+    rows
+      .filter((row) => row.kind === "toolCall")
+      .map((row) => row.kind === "toolCall" && [row.toolCallId, row.status, row.backgrounded]),
+    [["acp-subagent:a55b64c6621632ee3", "running", true]],
+  );
+  const subagent = rows.find((row) => row.kind === "subagent");
+  assert.equal(subagent?.kind === "subagent" && subagent.backgrounded, true);
+  assert.equal(subagent?.kind === "subagent" && subagent.status, "running");
+  assert.equal(projection.snapshot().subagents?.running.length, 1);
+});

@@ -100,7 +100,12 @@ sequenceDiagram
 ### D5 子智能体
 
 - 声明 `clientCapabilities.subagents = {}` 与 AIR `_meta.jetbrains.air = {version:1, capabilities:
-["nativeSubagentSessions","asyncTasks"]}`（SDK 1.4 无类型，按 wire 形状断言）。
+["nativeSubagentSessions","asyncTasks"]}`（SDK 1.4 无类型，按 wire 形状断言）。实测适配器捆绑的 SDK 1.5 解析
+  initialize 时会剥离 `subagents` 字段，因此 AIR `nativeSubagentSessions` 是实际生效的声明，两者都保留。
+- Claude Code 2.1.280 默认异步启动 Agent：适配器在原生模式下仍发送一条无前置 `tool_call` 的控制
+  `tool_call_update`（`_meta.claudeCode.toolResponse{isAsync:true, agentId}`）。该回执不生成工具行（否则回合结束时
+  会被判为未收到终态的失败 Agent 行），只把 `agentId` 对应子会话的宿主行与 subagent 行标记 `backgrounded`。
+  失败回退（`tool_call` + `failed`）仍按普通工具行展示。
 - `subagent_spawned(S)` 于父会话 P（根或已登记子）：在 P 的当前回合（或 D4 展示轮）追加宿主
   `toolCall{toolCallId:"acp-subagent:"+S, toolName:"Agent", input:{description,prompt,subagent_type}, status:"running"}`
   与 `subagent{parentToolCallId: 同 id, subagentType:name, status:"running", summaryText:task, childSessionId:V(S)}`；

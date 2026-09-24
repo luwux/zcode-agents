@@ -4,6 +4,10 @@
 // event except `tool_result` (those came from the CLI), so each run of non-tool_result events is
 // one model response ("segment"). The CLI sends one request per segment: the first request of a
 // turn carries the user prompt, the following ones carry tool results.
+//
+// An `end_response` marker closes a text-only response explicitly. Without it such a response is
+// merged into the next one (the CLI would end its turn); with native subagents the parent and the
+// subagent each end their own response inside the same fixture turn, so both must stay separate.
 
 /** Replace `${WORKSPACE}` in every string of a JSON-compatible value. */
 export function substituteWorkspace(value, workspace) {
@@ -26,13 +30,17 @@ export function buildSegments(fixture) {
     const segments = [];
     let current = [];
     let lastT = 0;
-    const flush = () => {
-      if (current.length) segments.push(current);
+    const flush = (final = false) => {
+      if (current.length) segments.push(final ? Object.assign(current, { final: true }) : current);
       current = [];
     };
     for (const event of turn.events) {
       if (event.kind === "tool_result") {
         flush();
+        continue;
+      }
+      if (event.kind === "end_response") {
+        flush(true);
         continue;
       }
       if (!MODEL_EVENT_KINDS.has(event.kind)) continue;
@@ -48,7 +56,7 @@ export function buildSegments(fixture) {
     segments.forEach((segment, index) => {
       const events = [...carry, ...segment];
       const hasTool = events.some((event) => event.kind === "tool_call");
-      if (!hasTool && index < segments.length - 1) {
+      if (!hasTool && !segment.final && index < segments.length - 1) {
         carry = events;
         return;
       }
