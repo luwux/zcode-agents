@@ -361,7 +361,9 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
             tools.some((tool) => /https?:\/\//.test(tool.inputText)),
             "the agent fetched at least one URL",
           );
-          assert.match(answer, /https?:\/\//, "the answer lists fetched URLs");
+          // Codex 的拒绝选项（“No, and tell Codex what to do differently”）会中止回合，此时没有最终答案。
+          if (!decisions.some((d) => d.decision === "reject"))
+            assert.match(answer, /https?:\/\//, "the answer lists fetched URLs");
         }
         // 回归保护：密钥不得出现在投影、工具输出或配置文件中。
         assert.ok(!JSON.stringify(rows).includes(key!));
