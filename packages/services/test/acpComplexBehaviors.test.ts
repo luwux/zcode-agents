@@ -8,6 +8,7 @@ import type {
   ConversationSnapshot,
   ConversationTopicWireCandidate,
 } from "@zcode/shared/zcode-protocol-v4";
+import { zcodeSessionSubagentsResultSchema } from "@zcode/shared";
 import { AcpV4Bridge } from "../src/agent-runtime/acpV4Bridge.js";
 import { saveAgentServerConfig } from "../src/agent-runtime/agentServersRegistry.js";
 import { acpSubagentSessionId } from "../src/agent-runtime/acpSubagentRegistry.js";
@@ -149,7 +150,10 @@ test("ACP complex behaviors round-trip through connection, coordinator and V4 br
     );
     const childRows = bridge.coordinator.rowsRange({ ...child, limit: 20 }).rows;
     assert.ok(childRows.some((row) => row.kind === "toolCall" && row.toolName === "Grep"));
-    const listed = await bridge.listSubagents({ ...task, endedLimit: 10 });
+    // 与 CLI 同一 strict schema：服务层 listSessionSubagents 直接返回该结果。
+    const listed = zcodeSessionSubagentsResultSchema.parse(
+      await bridge.listSubagents({ ...task, endedLimit: 10 }),
+    );
     assert.equal(listed.ended.items[0]?.childSessionId, child.taskId);
     assert.equal(listed.ended.items[0]?.status, "success");
 
