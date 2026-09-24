@@ -73,9 +73,9 @@ jobs:
           if-no-files-found: ignore
 
   live-openrouter:
-    name: Live BYOK smoke (OpenRouter)
+    name: Live BYOK tasks (OpenRouter, MiMo v2.6 Flash)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 75
     # The key is exposed only to the three steps that need it (never to install or third-party steps).
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +109,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-home" "$GITHUB_WORKSPACE/artifacts/live"
           HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$CACHE" CODEZ_LIVE_RECORD=1 \
             CODEZ_E2E_ARTIFACTS="$GITHUB_WORKSPACE/artifacts/live" \
-            node --import tsx --test test/e2e/builtinRuntimesLive.e2e.ts
+            node --import tsx --test --test-concurrency=3 test/e2e/live/*.live.e2e.ts
       - name: OpenRouter usage after
         if: always()
         id: after

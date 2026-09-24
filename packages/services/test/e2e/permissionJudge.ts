@@ -9,7 +9,7 @@ import type { RequestPermissionRequest, RequestPermissionResponse } from "@agent
 export type JudgeDecision = {
   decision: "allow" | "reject";
   reason: string;
-  judge: "rule" | "model";
+  judge: "rule" | "random";
 };
 
 const DENY_PATTERNS = [
@@ -52,52 +52,38 @@ export function ruleJudge(request: RequestPermissionRequest, workspace: string):
   return { decision: "allow", reason: "inside workspace, no deny rule", judge: "rule" };
 }
 
-/** 模型裁决只在规则放行时调用；模型输出 DENY 即拒绝，异常时按拒绝处理（失败即收紧）。 */
-export async function modelJudge(
+/** 可复现的伪随机数（mulberry32），种子写入产物以便复跑同一组裁决。 */
+export function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 实时测试的“用户”：规则先行（越界/拒绝名单直接拒绝），其余请求按概率随机拒绝（默认 1/5），
+ * 以覆盖 Agent 在被拒后继续工作的路径；不再调用模型裁决（不值得额外的 token）。
+ */
+export function randomJudge(
   request: RequestPermissionRequest,
   workspace: string,
-  options: { apiKey: string; model: string },
-): Promise<JudgeDecision> {
+  random: () => number,
+  rejectRate = 0.2,
+): JudgeDecision {
   const rule = ruleJudge(request, workspace);
   if (rule.decision === "reject") return rule;
-  const summary = JSON.stringify({
-    title: request.toolCall.title,
-    kind: request.toolCall.kind,
-    rawInput: request.toolCall.rawInput,
-  }).slice(0, 4000);
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        model: options.model,
-        max_tokens: 20,
-        temperature: 0,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You approve or deny a coding agent's tool call on behalf of the user. The workspace is " +
-              `${workspace}. APPROVE edits and harmless commands that stay inside the workspace. ` +
-              "DENY anything destructive, anything outside the workspace, and anything whose command or " +
-              "path contains 'denied'. Answer with exactly one word: APPROVE or DENY.",
-          },
-          { role: "user", content: summary },
-        ],
-      }),
-    });
-    const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const answer = body.choices?.[0]?.message?.content?.trim().toUpperCase() ?? "";
-    if (answer.startsWith("APPROVE"))
-      return { decision: "allow", reason: "model approved", judge: "model" };
-    return {
-      decision: "reject",
-      reason: `model answered ${JSON.stringify(answer.slice(0, 40))}`,
-      judge: "model",
-    };
-  } catch (error) {
-    return { decision: "reject", reason: `model judge failed: ${String(error)}`, judge: "model" };
-  }
+  const roll = random();
+  return roll < rejectRate
+    ? {
+        decision: "reject",
+        reason: `random rejection (roll ${roll.toFixed(3)} < ${rejectRate})`,
+        judge: "random",
+      }
+    : { decision: "allow", reason: `random approval (roll ${roll.toFixed(3)})`, judge: "random" };
 }
 
 export function responseFor(
