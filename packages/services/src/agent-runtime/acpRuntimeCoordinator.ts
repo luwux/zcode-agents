@@ -37,6 +37,7 @@ import {
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
 import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import { describeAcpError } from "#src/agent-runtime/acpErrors.js";
 import {
   acpAuthStateStore,
   isAcpAuthRequiredError,
@@ -598,7 +599,7 @@ export class AcpRuntimeCoordinator {
       const error = managed.meta.runtimeId
         ? this.authFailure(managed.meta.runtimeId, caught)
         : caught;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeAcpError(error);
       await this.finishTurn(managed, {
         error: managed.crashed ? "ACP process exited; turn outcome is unknown" : message,
       }).catch(() => {});

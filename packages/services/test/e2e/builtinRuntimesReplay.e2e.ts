@@ -2,11 +2,15 @@
  * Offline e2e: real Claude Code / Codex / Pi CLIs (pinned, installed by the production installer)
  * driven through CodeZ's AcpRuntimeCoordinator against the local replay proxy.
  *
+ * Covers multi-turn replays and a permission-mode matrix per runtime: bypass / full-access (no
+ * prompts), accept-edits (edits auto-approved, commands judged) and ask modes, where the test acts
+ * as the user and judges every prompt through the same respondPermission path the UI uses.
+ *
  * Run via `node scripts/acp-replay/run-replay-e2e.mjs` (installs runtimes, then runs this file in a
  * loopback-only network namespace). Skips unless CODEZ_E2E_REPLAY=1 and CODEZ_ACP_RUNTIMES_DIR is set.
  */
 import assert from "node:assert/strict";
-import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,6 +25,12 @@ import type { AgentProviderSettings } from "../../src/agent-runtime/builtin/buil
 import type { BuiltinAcpRuntime } from "../../src/agent-runtime/builtin/builtinRuntimeCatalog.js";
 import { setDataBaseDir } from "../../src/paths.js";
 import { TaskIndexRepo } from "../../src/session/taskIndexRepo.js";
+import {
+  responseFor,
+  ruleJudge,
+  sandboxEnvForBypass,
+  type JudgeDecision,
+} from "./permissionJudge.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const replayDir = resolve(here, "../../../../scripts/acp-replay");
@@ -40,66 +50,129 @@ interface Case {
   runtime: BuiltinAcpRuntime;
   fixture: string;
   provider: (url: string, model: string) => AgentProviderSettings;
-  /** Mode requested at creation; never a bypass mode. */
+  /** Permission mode requested at creation (must be offered by the agent). */
   modeId?: string;
-  expectPermission: boolean;
+  /** Non-secret config env (IS_SANDBOX lets Claude offer bypass when running as root). */
+  configEnv?: Record<string, string>;
+  /** Inclusive bounds on permission prompts the test "user" answers. */
+  permissions: { min: number; max: number };
+  /** Files that must / must not exist in the workspace afterwards. */
+  files?: { present: string[]; absent: string[] };
 }
 
+const claudeProvider = (url: string, model: string): AgentProviderSettings => ({
+  preset: "custom",
+  baseUrl: url,
+  model,
+});
+const codexProvider = (url: string, model: string): AgentProviderSettings => ({
+  preset: "custom",
+  baseUrl: `${url}/v1`,
+  model,
+  providerId: "replay",
+});
+const piProvider = (url: string, model: string): AgentProviderSettings => ({
+  preset: "custom",
+  baseUrl: url,
+  api: "anthropic-messages",
+  model,
+});
+const ALL_FILES = {
+  present: ["judge-edit.txt", "judge-allowed.txt", "judge-denied.txt"],
+  absent: [],
+};
+const JUDGED_FILES = {
+  present: ["judge-edit.txt", "judge-allowed.txt"],
+  absent: ["judge-denied.txt"],
+};
+const ANY = { min: 0, max: Number.POSITIVE_INFINITY };
+
 const CASES: Case[] = [
+  // 多轮回放（各 Runtime 默认模式）：只读命令；出现的任何提示由测试按规则裁决。
   {
     name: "claude-code multi-turn replay",
     runtime: "claude-code",
     fixture: "claude-code.json",
-    provider: (url, model) => ({ preset: "custom", baseUrl: url, model }),
-    expectPermission: false,
-  },
-  {
-    name: "claude-code permission prompt",
-    runtime: "claude-code",
-    fixture: "claude-code-permission.json",
-    provider: (url, model) => ({ preset: "custom", baseUrl: url, model }),
-    modeId: "default",
-    expectPermission: true,
+    provider: claudeProvider,
+    permissions: ANY,
   },
   {
     name: "codex multi-turn replay",
     runtime: "codex",
     fixture: "codex.json",
-    provider: (url, model) => ({
-      preset: "custom",
-      baseUrl: `${url}/v1`,
-      model,
-      providerId: "replay",
-    }),
-    expectPermission: false,
-  },
-  {
-    name: "codex permission prompt",
-    runtime: "codex",
-    fixture: "codex-permission.json",
-    provider: (url, model) => ({
-      preset: "custom",
-      baseUrl: `${url}/v1`,
-      model,
-      providerId: "replay",
-    }),
-    // Codex 默认模式 "agent" 把审批交给 Guardian 模型审查；"read-only"（Ask for approval）才由用户审批。
-    modeId: "read-only",
-    expectPermission: true,
+    provider: codexProvider,
+    permissions: ANY,
   },
   {
     name: "pi multi-turn replay",
     runtime: "pi",
     fixture: "pi.json",
-    provider: (url, model) => ({
-      preset: "custom",
-      baseUrl: url,
-      api: "anthropic-messages",
-      model,
-    }),
-    expectPermission: false,
+    provider: piProvider,
+    permissions: { min: 0, max: 0 },
+  },
+  // 权限模式矩阵：同一组「编辑 + 允许的命令 + 裁决拒绝的命令」。
+  {
+    name: "claude-code bypassPermissions: no prompts, everything runs",
+    runtime: "claude-code",
+    fixture: "claude-code-modes.json",
+    provider: claudeProvider,
+    modeId: "bypassPermissions",
+    configEnv: sandboxEnvForBypass(),
+    permissions: { min: 0, max: 0 },
+    files: ALL_FILES,
+  },
+  {
+    name: "claude-code acceptEdits: edit auto-approved, commands judged",
+    runtime: "claude-code",
+    fixture: "claude-code-modes.json",
+    provider: claudeProvider,
+    modeId: "acceptEdits",
+    permissions: { min: 2, max: 2 },
+    files: JUDGED_FILES,
+  },
+  {
+    name: "claude-code default: edit and commands judged, denied command blocked",
+    runtime: "claude-code",
+    fixture: "claude-code-modes.json",
+    provider: claudeProvider,
+    modeId: "default",
+    permissions: { min: 3, max: 3 },
+    files: JUDGED_FILES,
+  },
+  {
+    name: "codex agent-full-access: no prompts, everything runs",
+    runtime: "codex",
+    fixture: "codex-modes-full-access.json",
+    provider: codexProvider,
+    modeId: "agent-full-access",
+    permissions: { min: 0, max: 0 },
+    files: ALL_FILES,
+  },
+  {
+    name: "codex read-only (ask): escalations judged, denied command blocked",
+    runtime: "codex",
+    fixture: "codex-modes.json",
+    provider: codexProvider,
+    modeId: "read-only",
+    permissions: { min: 3, max: 3 },
+    files: JUDGED_FILES,
+  },
+  {
+    name: "pi (no permission system): everything runs without prompts",
+    runtime: "pi",
+    fixture: "pi-modes.json",
+    provider: piProvider,
+    permissions: { min: 0, max: 0 },
+    files: ALL_FILES,
   },
 ];
+
+// Codex 默认 "agent" 模式由 Guardian 模型代为审批；回放代理无法扮演该审查模型，由 live 测试覆盖。
+test(
+  "codex agent (Guardian auto-review) mode",
+  { skip: "Guardian review needs a real model; covered by builtinRuntimesLive.e2e.ts" },
+  () => {},
+);
 
 async function startProxy(fixture: string, workspace: string, log: string) {
   const child = spawn(
@@ -145,9 +218,10 @@ async function makeWorkspace(root: string): Promise<string> {
     `${JSON.stringify({ name: "replay-workspace", private: true, version: "0.0.0" }, null, 2)}\n`,
   );
   const git = (...args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
+  const identity = ["-c", "user.email=replay@example.invalid", "-c", "user.name=Replay"];
   git("init", "-q");
-  git("-c", "user.email=replay@example.invalid", "-c", "user.name=Replay", "add", ".");
-  git("-c", "user.email=replay@example.invalid", "-c", "user.name=Replay", "commit", "-qm", "init");
+  git(...identity, "add", ".");
+  git(...identity, "commit", "-qm", "init");
   return workspace;
 }
 
@@ -163,6 +237,7 @@ for (const testCase of CASES) {
     const { child: proxy, url } = await startProxy(testCase.fixture, workspace, proxyLog);
     const repo = new TaskIndexRepo(join(root, "tasks.sqlite"));
     const permissionRequests: RequestPermissionRequest[] = [];
+    const decisions: Array<{ title: string | null | undefined } & JudgeDecision> = [];
     let coordinator: AcpRuntimeCoordinator | null = null;
     const configId = `${testCase.runtime}-replay`;
     try {
@@ -172,19 +247,26 @@ for (const testCase of CASES) {
         runtime: testCase.runtime,
         auth: "byok",
         provider: testCase.provider(url, fixture.model),
+        ...(testCase.configEnv && Object.keys(testCase.configEnv).length
+          ? { env: testCase.configEnv }
+          : {}),
       });
       await saveBuiltinConfigApiKey(configId, "replay-dummy-key");
       coordinator = new AcpRuntimeCoordinator(repo, {
         onPermission: (target, request) => {
           permissionRequests.push(request);
-          // Approve once through the same path the UI uses; never a bypass mode.
-          const option =
-            request.options.find((candidate) => candidate.kind === "allow_once") ??
-            request.options.find((candidate) => candidate.kind.startsWith("allow"));
-          assert.ok(option, "permission request offers an allow option");
+          // 测试扮演用户：经与 UI 相同的 respondPermission 路径，按规则裁决（允许/拒绝）。
+          const decision = ruleJudge(request, workspace);
+          decisions.push({ title: request.toolCall.title, ...decision });
+          const response = responseFor(request, decision);
           setTimeout(() => {
             assert.ok(
-              coordinator!.respondPermission({ ...target, optionId: option.optionId }),
+              coordinator!.respondPermission({
+                ...target,
+                ...(response.outcome.outcome === "selected"
+                  ? { optionId: response.outcome.optionId }
+                  : {}),
+              }),
               "permission was pending",
             );
           }, 50);
@@ -193,7 +275,6 @@ for (const testCase of CASES) {
       const target = { workspacePath: workspace };
       const preview = await coordinator.discoverConfig({ ...target, runtimeId: configId });
       const modes = preview.modes?.map((mode) => mode.id) ?? [];
-      assert.ok(!(testCase.modeId ?? "").match(/bypass|yolo|full/i));
       if (testCase.modeId)
         assert.ok(
           modes.includes(testCase.modeId),
@@ -203,14 +284,11 @@ for (const testCase of CASES) {
         ...target,
         commandId: `${testCase.runtime}-task`,
         runtimeId: configId,
-        ...(testCase.modeId && modes.includes(testCase.modeId) ? { modeId: testCase.modeId } : {}),
+        ...(testCase.modeId ? { modeId: testCase.modeId } : {}),
       });
       const confirmedMode = coordinator.snapshot({ ...target, taskId: meta.taskId })?.config
         .acpModeId;
-      assert.ok(
-        !String(confirmedMode ?? "").match(/bypass|yolo|full-access/i),
-        `mode ${confirmedMode} must not bypass permissions`,
-      );
+      if (testCase.modeId) assert.equal(confirmedMode, testCase.modeId, "agent confirmed the mode");
 
       // codex-acp 把 write_stdin（轮询已有 exec 会话）并入原 exec 行，不产生新的工具行。
       const expectedTools = fixture.turns.map(
@@ -237,20 +315,21 @@ for (const testCase of CASES) {
       const { rows } = coordinator.rowsRange({ ...target, taskId: meta.taskId, limit: 10_000 });
       if (artifacts) {
         await mkdir(artifacts, { recursive: true });
+        const base = `${testCase.runtime}-${testCase.fixture}-${testCase.modeId ?? "default"}`;
         await writeFile(
-          join(artifacts, `${testCase.runtime}-${testCase.fixture}.rows.json`),
-          JSON.stringify({ phase: snapshot.control.phase, rows }, null, 2),
+          join(artifacts, `${base}.rows.json`),
+          JSON.stringify(
+            { phase: snapshot.control.phase, mode: confirmedMode, decisions, rows },
+            null,
+            2,
+          ),
         );
         await writeFile(
-          join(artifacts, `${testCase.runtime}-${testCase.fixture}.proxy.jsonl`),
+          join(artifacts, `${base}.proxy.jsonl`),
           await readFile(proxyLog, "utf8").catch(() => ""),
         );
       }
-      assert.notEqual(
-        snapshot.control.phase,
-        "error",
-        JSON.stringify((snapshot as { lastError?: unknown }).lastError ?? snapshot.control),
-      );
+      assert.notEqual(snapshot.control.phase, "error", JSON.stringify(snapshot.control));
 
       const userRows = rows.filter((row) => row.kind === "userInput");
       assert.equal(userRows.length, fixture.turns.length, "one user row per turn");
@@ -289,10 +368,20 @@ for (const testCase of CASES) {
         fixture.turns.length,
       );
 
-      if (testCase.expectPermission) {
-        assert.ok(permissionRequests.length >= 1, "default mode asked for permission");
-        await access(join(workspace, "replay-permission-marker.txt"));
-      }
+      assert.ok(
+        permissionRequests.length >= testCase.permissions.min &&
+          permissionRequests.length <= testCase.permissions.max,
+        `permission prompts ${permissionRequests.length} not in [${testCase.permissions.min}, ${testCase.permissions.max}]: ${JSON.stringify(decisions)}`,
+      );
+      for (const file of testCase.files?.present ?? [])
+        await access(join(workspace, file)).catch(() =>
+          assert.fail(`${file} should exist: ${JSON.stringify(decisions)}`),
+        );
+      for (const file of testCase.files?.absent ?? [])
+        await access(join(workspace, file)).then(
+          () => assert.fail(`${file} must not exist: the judge denied it`),
+          () => {},
+        );
     } finally {
       await coordinator?.closeAll();
       proxy.kill();
@@ -301,5 +390,3 @@ for (const testCase of CASES) {
     }
   });
 }
-
-export type { ChildProcess };

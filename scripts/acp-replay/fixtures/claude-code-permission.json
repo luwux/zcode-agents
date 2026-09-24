@@ -7,16 +7,30 @@
     {
       "user": { "text": "Create the marker file.", "t_ms": 0 },
       "events": [
-        { "kind": "text", "t_ms": 10, "message_id": "msg_perm_1", "text": "Creating the marker file." },
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "message_id": "msg_perm_1",
+          "text": "Creating the marker file."
+        },
         {
           "kind": "tool_call",
           "t_ms": 20,
           "message_id": "msg_perm_1",
           "call_id": "toolu_perm_01",
           "name": "Bash",
-          "input": { "command": "touch replay-permission-marker.txt", "description": "Create marker file" }
+          "input": {
+            "command": "touch replay-permission-marker.txt",
+            "description": "Create marker file"
+          }
         },
-        { "kind": "tool_result", "t_ms": 30, "call_id": "toolu_perm_01", "is_error": false, "output": "" },
+        {
+          "kind": "tool_result",
+          "t_ms": 30,
+          "call_id": "toolu_perm_01",
+          "is_error": false,
+          "output": ""
+        },
         { "kind": "text", "t_ms": 40, "message_id": "msg_perm_2", "text": "Marker file created." }
       ]
     }

@@ -127,6 +127,10 @@ export function buildBuiltinLaunchEnv(input: BuiltinLaunchEnvInput): BuiltinLaun
       applyPi(input, plan, privateHome, byok);
       break;
   }
+  // 修复原因：Pi 与各 Node 适配器使用 Node 内置 fetch，默认忽略 HTTP(S)_PROXY；企业代理下会表现为
+  // "Connection error"。Node 24 以 NODE_USE_ENV_PROXY=1 显式启用；原生 claude/codex 本身读取代理变量。
+  if (["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"].some((name) => env[name]))
+    env.NODE_USE_ENV_PROXY = "1";
   for (const name of ["NO_PROXY", "no_proxy"]) {
     const entries = (env[name] ?? "")
       .split(",")

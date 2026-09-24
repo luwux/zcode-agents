@@ -95,3 +95,17 @@ test("steer requests use each protocol's params and map outcomes", async () => {
     "promptRequired",
   );
 });
+
+test("ACP error descriptions keep the agent's details", async () => {
+  const { describeAcpError } = await import("../src/agent-runtime/acpErrors.js");
+  assert.equal(
+    describeAcpError({
+      code: -32603,
+      message: "Internal error",
+      data: { details: "401: bad key" },
+    }),
+    "Internal error: 401: bad key",
+  );
+  assert.equal(describeAcpError(new Error("plain")), "plain");
+  assert.equal(describeAcpError({ message: "x: y", data: { details: "y" } }), "x: y");
+});

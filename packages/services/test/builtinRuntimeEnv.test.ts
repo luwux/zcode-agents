@@ -86,6 +86,8 @@ test("Claude BYOK via OpenRouter strips host Anthropic routing and injects the g
   assert.equal(plan.env.HTTPS_PROXY, "http://proxy.local:3128");
   assert.equal(plan.env.NO_PROXY, "corp.internal,127.0.0.1,localhost,::1");
   assert.equal(plan.env.no_proxy, "127.0.0.1,localhost,::1");
+  // 宿主设置了代理时，Node 适配器也必须走代理。
+  assert.equal(plan.env.NODE_USE_ENV_PROXY, "1");
   assert.equal(plan.nativeHome, join(HOME, "claude"));
   assert.equal(plan.problem, undefined);
 });
@@ -123,6 +125,16 @@ test("Claude subscription strips every BYOK routing variable, including config-s
   assert.ok(!Object.values(plan.env).includes(SECRET));
   assert.equal(plan.env.DISABLE_TELEMETRY, "1");
   assert.equal(plan.env.CLAUDE_CONFIG_DIR, join(HOME, "claude"));
+});
+
+test("NODE_USE_ENV_PROXY is only set when the host has a proxy", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({ runtime: "pi", auth: "byok", provider: { preset: "openrouter" } }),
+    hostEnv: { PATH: "/usr/bin", HOME: "/home/user" },
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assert.equal(plan.env.NODE_USE_ENV_PROXY, undefined);
 });
 
 test("cli-login uses the global CLI home and still strips BYOK variables", () => {

@@ -103,7 +103,7 @@ jobs:
         run: |
           CACHE="$HOME/.cache/codez-acp-runtimes"
           mkdir -p "$RUNNER_TEMP/live-home" "$GITHUB_WORKSPACE/artifacts/live"
-          HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$CACHE" \
+          HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$CACHE" CODEZ_LIVE_RECORD=1 \
             CODEZ_E2E_ARTIFACTS="$GITHUB_WORKSPACE/artifacts/live" \
             node --import tsx --test test/e2e/builtinRuntimesLive.e2e.ts
       - name: OpenRouter usage after
