@@ -139,6 +139,8 @@ export async function runCase(testCase, options) {
   });
   // 回放用例经设置页添加模型并键入 Key（真实点击/键入）；实时用例与诊断变通仍播种，真实 Key 不进入 trace。
   const configureInUi = !testCase.live && !workaround;
+  // 实时工具用例也经设置页添加模型；真实 Key 仍经 stdin 播种（键入会进入 Playwright trace）。
+  const addModelInUi = (configureInUi || Boolean(testCase.addModelInUi)) && !workaround;
   let uiModel = null;
 
   try {
@@ -147,6 +149,7 @@ export async function runCase(testCase, options) {
     let expectations = null;
     await step("prepare", async () => {
       workspace = await makeWorkspace(root);
+      if (testCase.setupWorkspace) await testCase.setupWorkspace(workspace);
       let provider = testCase.live ? testCase.provider() : null;
       const detail = {};
       if (!testCase.live) {
@@ -161,7 +164,7 @@ export async function runCase(testCase, options) {
         provider = testCase.provider(proxy.url, fixture.model);
         Object.assign(detail, { proxy: proxy.url, fixture: testCase.fixture });
       }
-      if (configureInUi) {
+      if (addModelInUi) {
         const { model, ...withoutModel } = provider;
         uiModel = model;
         provider = withoutModel;
@@ -213,7 +216,7 @@ export async function runCase(testCase, options) {
         configureRuntimeInSettings(ui(), {
           configId: testCase.configId,
           configName: testCase.configName,
-          addModel: configureInUi ? uiModel : null,
+          addModel: addModelInUi ? uiModel : null,
           apiKey: configureInUi ? REPLAY_KEY : null,
           wanted: testCase.live ? options.liveModel : fixture.model,
           // Claude 的 Default 经 ANTHROPIC_DEFAULT_*_MODEL 指向配置的模型；Live 下其他 Runtime 必须公布该模型本身。
@@ -313,6 +316,12 @@ export async function runCase(testCase, options) {
         dom.toolCards.map((card) => card.status),
       );
       check(!app.exited(), "app process still running");
+      if (testCase.verify)
+        for (const [ok, message, detail] of await testCase.verify({
+          workspace,
+          timeline: dom.timelineText,
+        }))
+          check(ok, message, detail);
       if (!testCase.live)
         result.observations.toolCalls = assertReplay({
           check,

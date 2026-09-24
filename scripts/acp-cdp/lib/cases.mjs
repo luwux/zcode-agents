@@ -2,7 +2,61 @@
 // scripts/acp-replay; live cases talk to OpenRouter with a user-provided key.
 import { buildSegments } from "../../acp-replay/replay-core.mjs";
 
-export const LIVE_MODEL = "xiaomi/mimo-v2.6-flash";
+// 实时用例默认用便宜且工具调用可靠的模型；可用 CODEZ_CDP_LIVE_MODEL 覆盖。
+export const LIVE_MODEL = process.env.CODEZ_CDP_LIVE_MODEL ?? "deepseek/deepseek-v4-flash";
+
+const TOOLS_SECRET = "MANGO-17";
+const SKILL_PHRASE = "PROBE-7F3A-SKILL";
+const SKILL_MD = [
+  "---",
+  "name: codez-probe",
+  "description: Use when asked for the codez probe phrase. It returns the verification phrase.",
+  "---",
+  "",
+  `Reply with the exact phrase ${SKILL_PHRASE} and nothing else.`,
+  "",
+].join("\n");
+const TOOLS_PROMPTS = [
+  "Read the file notes.txt in this workspace and reply with the secret word written in it.",
+  "Create a new file hello.txt in this workspace whose entire content is exactly: hello codez",
+  "Edit hello.txt so that its entire content becomes exactly: goodbye codez",
+  "Use the codez-probe skill: follow its instructions and reply with the phrase it gives you.",
+];
+
+/** 工具用例的工作区：一个带暗号的文件，以及各 Runtime 约定目录下的同一个技能。 */
+async function setupToolsWorkspace(workspace) {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  await writeFile(
+    join(workspace, "notes.txt"),
+    `Project notes.\nThe secret word is ${TOOLS_SECRET}.\n`,
+  );
+  for (const dir of [".claude/skills", ".agents/skills", ".codex/skills", ".pi/skills"]) {
+    await mkdir(join(workspace, dir, "codez-probe"), { recursive: true });
+    await writeFile(join(workspace, dir, "codez-probe", "SKILL.md"), SKILL_MD);
+  }
+}
+
+/** 按轮次验证读、写、改与技能：答案看渲染后的时间线，写与改看磁盘上的文件。 */
+async function verifyTools({ workspace, timeline }) {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const hello = await readFile(join(workspace, "hello.txt"), "utf8").catch(() => null);
+  return [
+    [timeline.includes(TOOLS_SECRET), `read: the answer contains the secret word ${TOOLS_SECRET}`],
+    [hello !== null, "write: hello.txt exists"],
+    [
+      hello?.trim() === "goodbye codez",
+      "edit: hello.txt now reads exactly 'goodbye codez'",
+      { hello },
+    ],
+    [timeline.includes(SKILL_PHRASE), `skill: the answer contains ${SKILL_PHRASE}`],
+  ];
+}
+
+const BROWSER_SKIP =
+  "Claude Code, Codex and Pi expose no browser tool in these configurations (Claude's WebFetch does not " +
+  "render pages; CodeZ's browser-use belongs to its own agent), so there is no ACP browser action to drive";
 export const RUNTIMES = ["claude-code", "codex", "pi"];
 
 /** Mode names as the ACP adapters advertise them (shown in the composer's "ACP session mode"). */
@@ -110,6 +164,29 @@ export function buildCases({ mode, runtimes }) {
       });
       continue;
     }
+    // 真实 Key + 设置页添加模型（点击/键入）+ 读、写、改与技能，逐项核对界面和磁盘。
+    cases.push({
+      id: `${runtime}--live-tools`,
+      runtime,
+      title: `${label} live tools: read, write, edit, skill (OpenRouter ${LIVE_MODEL})`,
+      configId: `cdp-live-${runtime}-tools`,
+      configName: `CDP live ${label} tools`,
+      live: true,
+      addModelInUi: true,
+      prompts: TOOLS_PROMPTS,
+      provider: liveProvider,
+      mode: PERMISSION_MODE[runtime],
+      answerPermissions: true,
+      expectPermission: false,
+      setupWorkspace: setupToolsWorkspace,
+      verify: verifyTools,
+    });
+    cases.push({
+      id: `${runtime}--live-browser`,
+      runtime,
+      title: `${label} live browser`,
+      skip: BROWSER_SKIP,
+    });
     cases.push({
       id: `${runtime}--live-turn`,
       runtime,

@@ -162,6 +162,8 @@ injects it only into the runtime process). After the run it scans every artifact
 of each `trace.zip`, and fails if the key appears anywhere (`secret-scan.json`). Throwaway roots are
 deleted unless `--keep` is given; do not use `--keep` in live mode unless you delete them afterwards.
 
+Live tools cases (`<runtime>--live-tools`, default model `deepseek/deepseek-v4-flash`, override with `CODEZ_CDP_LIVE_MODEL`): the model is added through the Settings card (clicks and typing; the real key is still seeded over stdin so it never enters the Playwright trace), then four turns in one session check read (secret word from `notes.txt` in the answer), write and edit (`hello.txt` on disk ends as `goodbye codez`) and a workspace skill (`codez-probe`, phrase in the answer). `<runtime>--live-browser` is SKIPPED: the three runtimes expose no browser tool.
+
 Live cases: `<runtime>--live-turn` (asks the model to run `ls` with its shell tool and answer; answers
 any permission prompt with _allow once_) and `<runtime>--live-permission` (Claude Code `Manual`: asks for
 `touch live-permission-marker.txt`; Codex `Ask for approval`: asks for a `curl` to openrouter.ai followed
