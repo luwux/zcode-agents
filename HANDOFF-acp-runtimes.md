@@ -76,8 +76,7 @@ CodeZ's existing provider list and model picker; do not build new UI.
    - Fixtures: `fixtures/claude-code.json` (2 turns, 8 Bash/Read calls) and `fixtures/codex.json`
      (2 turns, 27 exec_command/write_stdin calls), sanitized from real sessions with
      `sanitize-sessions.mjs` (text masked by character class, commands replaced by read-only ones).
-     They are pushed to this branch **after the owner reviews them** — `git pull` before task 6; until
-     then build against the format produced by `sanitize-sessions.mjs`. Add a Pi fixture in the same format.
+     Owner-approved. Add a Pi fixture in the same format.
    - E2E: install the real CLIs + adapters into a temp dir, point them at the proxy (base URL + dummy
      key via the BYOK path above), drive them through CodeZ's ACP client, assert the V4 projection
      (text, tool call lifecycle, permission request, completion) and that approvals work in the default
