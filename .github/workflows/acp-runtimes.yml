@@ -1,0 +1,133 @@
+name: ACP runtimes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/acp-builtin-runtimes-0dh65u]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acp-runtimes-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24.14.0"
+  PNPM_VERSION: "10.33.2"
+
+jobs:
+  checks:
+    name: Typecheck, lint, unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm architecture:check
+      - name: Services unit tests
+        working-directory: packages/services
+        run: node --import tsx --test test/*.test.ts
+      - name: Replay proxy unit tests
+        run: node --test scripts/acp-replay/replay-core.test.mjs
+
+  replay-e2e:
+    name: Offline replay e2e (real CLIs, loopback-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Allow unprivileged user namespaces (network isolation)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/codez-acp-runtimes
+          key: acp-runtimes-${{ runner.os }}-${{ hashFiles('packages/services/src/agent-runtime/builtin/manifests/*.json', 'packages/services/src/agent-runtime/builtin/builtinRuntimeCatalog.ts') }}
+      - name: Run replay e2e
+        run: node scripts/acp-replay/run-replay-e2e.mjs --cache ~/.cache/codez-acp-runtimes --artifacts artifacts/replay
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-e2e
+          path: artifacts/replay
+          if-no-files-found: ignore
+
+  live-openrouter:
+    name: Live BYOK smoke (OpenRouter)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/codez-acp-runtimes
+          key: acp-runtimes-${{ runner.os }}-${{ hashFiles('packages/services/src/agent-runtime/builtin/manifests/*.json', 'packages/services/src/agent-runtime/builtin/builtinRuntimeCatalog.ts') }}
+      - name: Install runtimes
+        working-directory: packages/services
+        run: CODEZ_ACP_RUNTIMES_DIR="$HOME/.cache/codez-acp-runtimes" node --import tsx ../../scripts/acp-replay/install-runtimes.ts
+      - name: OpenRouter usage before
+        id: before
+        run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Live tests
+        id: live
+        working-directory: packages/services
+        run: |
+          mkdir -p "$RUNNER_TEMP/live-home"
+          HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$HOME/.cache/codez-acp-runtimes" \
+            CODEZ_E2E_ARTIFACTS="$GITHUB_WORKSPACE/artifacts/live" \
+            node --import tsx --test --test-reporter=spec --test-reporter-destination=stdout \
+              --test-reporter=junit --test-reporter-destination="$GITHUB_WORKSPACE/artifacts/live-junit.xml" \
+              test/e2e/builtinRuntimesLive.e2e.ts
+      - name: OpenRouter usage after
+        if: always()
+        id: after
+        run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Cost summary
+        if: always()
+        env:
+          BEFORE: ${{ steps.before.outputs.usage }}
+          AFTER: ${{ steps.after.outputs.usage }}
+        run: |
+          node -e '
+            const b = JSON.parse(process.env.BEFORE || "{}").usage, a = JSON.parse(process.env.AFTER || "{}").usage;
+            const line = (typeof a === "number" && typeof b === "number")
+              ? `OpenRouter cost for this run: $${(a - b).toFixed(6)} (key usage ${b} -> ${a})`
+              : "OpenRouter cost unavailable (no key or usage endpoint failed)";
+            console.log(line);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-openrouter
+          path: artifacts
+          if-no-files-found: ignore
