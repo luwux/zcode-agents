@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentRuntimeId } from "@zcode/shared";
 import type { ZCodeTaskMeta } from "@zcode/shared";
 import {
+  BACKGROUND_WORK_CANCEL_REJECTED_FAULT_PREFIX,
   commandPayloadSchemas,
   conversationTopic,
   conversationTopicFrameSchema,
@@ -20,15 +21,24 @@ import {
   type AcpWorkspaceTarget,
 } from "#src/agent-runtime/acpRuntimeCoordinator.js";
 import { resolveAcpRuntimeSpec } from "#src/agent-runtime/acpRuntimeCatalog.js";
+import { parseAcpSubagentSessionId } from "#src/agent-runtime/acpSubagentRegistry.js";
 
 interface AcpV4Subscription {
   target: AcpWorkspaceTarget & { taskId: string };
   subscriptionId: string;
   ordinal: number;
+  /** 虚拟子会话订阅：仅在子 snapshot revision 变化时推送。 */
+  lastRevision?: number;
 }
 
 function targetKey(target: AcpWorkspaceTarget & { taskId: string }): string {
   return `${target.workspaceIdentity?.trim() || target.workspacePath}\0${target.taskId}`;
+}
+
+/** 虚拟子会话订阅归属的根会话键；根会话订阅返回自身键。 */
+function rootTargetKey(target: AcpWorkspaceTarget & { taskId: string }): string {
+  const virtual = parseAcpSubagentSessionId(target.taskId);
+  return targetKey(virtual ? { ...target, taskId: virtual.rootTaskId } : target);
 }
 
 /** ACP 到既有 ZCode V4 conversation wire 的唯一转换边界。 */
@@ -70,8 +80,18 @@ export class AcpV4Bridge {
   }
 
   async isAcpTask(target: AcpWorkspaceTarget & { taskId: string }): Promise<boolean> {
-    const meta = await this.taskIndex.getTaskMeta(target);
+    // 子智能体虚拟 id 不在任务索引中，按其根会话判定归属。
+    const taskId = parseAcpSubagentSessionId(target.taskId)?.rootTaskId ?? target.taskId;
+    const meta = await this.taskIndex.getTaskMeta({ ...target, taskId });
     return !!meta && !!meta.runtimeId && meta.runtimeId !== "zcode-cli";
+  }
+
+  /** `listSessionSubagents` 对 ACP 根会话（及虚拟子会话）由投影事实应答。 */
+  async listSubagents(
+    target: AcpWorkspaceTarget & { taskId: string; endedCursor?: string; endedLimit?: number },
+  ) {
+    await this.coordinator.load(target);
+    return this.coordinator.listSubagents(target);
   }
 
   async subscribe(target: AcpWorkspaceTarget & { taskId: string }): Promise<{
@@ -155,6 +175,8 @@ export class AcpV4Bridge {
       };
     }
     if (!envelope.sessionId) return reject("acpSessionRequired");
+    // 子智能体会话由 Agent 驱动，工作台只读。
+    if (parseAcpSubagentSessionId(envelope.sessionId)) return reject("acpSubagentReadOnly");
     const task = { ...target, taskId: envelope.sessionId };
     if (!this.coordinator.snapshot(task)) await this.coordinator.load(task);
     if (this.coordinator.isUnavailable(task)) return reject("acpRuntimeUnavailable");
@@ -226,10 +248,10 @@ export class AcpV4Bridge {
         return { commandId: envelope.commandId, status: "accepted", revisionAtDecision: revision };
       case "resolveInteraction": {
         const payload = commandPayloadSchemas.resolveInteraction.parse(envelope.payload);
-        const settled = this.coordinator.respondPermission({
+        const settled = this.coordinator.respondInteraction({
           ...task,
           interactionId: payload.interactionId,
-          optionId: payload.answer.optionId,
+          answer: payload.answer,
         });
         if (!settled) return reject("acpInteractionNotPending");
         return {
@@ -244,6 +266,16 @@ export class AcpV4Bridge {
             },
           },
         };
+      }
+      case "cancelBackgroundWork": {
+        const payload = commandPayloadSchemas.cancelBackgroundWork.parse(envelope.payload);
+        const outcome = await this.coordinator.cancelBackgroundWork({
+          ...task,
+          workId: payload.workId,
+        });
+        if (!outcome.accepted)
+          return reject(`${BACKGROUND_WORK_CANCEL_REJECTED_FAULT_PREFIX}${outcome.reason}`);
+        return { commandId: envelope.commandId, status: "accepted", revisionAtDecision: revision };
       }
       case "switchModelConfig": {
         const payload = commandPayloadSchemas.switchModelConfig.parse(envelope.payload);
@@ -320,7 +352,15 @@ export class AcpV4Bridge {
   ): void {
     const key = targetKey(target);
     for (const subscription of this.subscriptions.values()) {
-      if (targetKey(subscription.target) === key) this.publishTo(subscription, snapshot, delivery);
+      if (targetKey(subscription.target) === key) {
+        this.publishTo(subscription, snapshot, delivery);
+        continue;
+      }
+      // 根会话变化时，同一根下的虚拟子会话订阅按子 snapshot revision 去重推送。
+      if (rootTargetKey(subscription.target) !== key) continue;
+      const child = this.coordinator.snapshot(subscription.target);
+      if (!child || child.revision === subscription.lastRevision) continue;
+      this.publishTo(subscription, child, delivery);
     }
   }
 
@@ -329,6 +369,7 @@ export class AcpV4Bridge {
     snapshot: ConversationSnapshot,
     deliveryKind: TopicFrameDeliveryKind,
   ): void {
+    subscription.lastRevision = snapshot.revision;
     const topic = conversationTopic(subscription.target.taskId);
     const frame = conversationTopicFrameSchema.parse({
       topic,

@@ -22,13 +22,20 @@ import { deriveSessionTitle } from "#src/session/sessionTitle.js";
 import { createAcpManagedSession } from "#src/agent-runtime/acpSessionCreation.js";
 import { prepareAcpPromptAttachments } from "#src/agent-runtime/acpPromptAttachments.js";
 import {
+  createAcpPendingInteractions,
   createAcpSessionObserver,
   createManagedAcpSession,
+  reconcilePendingInteractions,
+  type AcpPendingInteractions,
   type ManagedAcpSession,
-  type PendingPermission,
   workspaceKey,
   sessionKey,
 } from "#src/agent-runtime/acpManagedSession.js";
+import { parseAcpSubagentSessionId } from "#src/agent-runtime/acpSubagentRegistry.js";
+import {
+  answerAcpElicitation,
+  type AcpInteractionAnswer,
+} from "#src/agent-runtime/acpElicitation.js";
 import {
   resolveAcpRuntimeSpec,
   isolateAcpNativeAutoMemory,
@@ -195,6 +202,14 @@ export class AcpRuntimeCoordinator {
   }
 
   async load(target: AcpWorkspaceTarget & { taskId: string }): Promise<ConversationSnapshot> {
+    const virtual = parseAcpSubagentSessionId(target.taskId);
+    if (virtual) {
+      // 子智能体虚拟会话只读：加载根会话后读取根投影中的子投影。
+      await this.load({ ...target, taskId: virtual.rootTaskId });
+      const child = this.snapshot(target);
+      if (!child) throw new Error("ACP subagent session was not found");
+      return child;
+    }
     const key = sessionKey(target, target.taskId);
     const current = this.active.get(key);
     if (current && !current.crashed) return current.projection.snapshot();
@@ -220,14 +235,14 @@ export class AcpRuntimeCoordinator {
       if (!spec || !meta.nativeSessionId) throw new Error("ACP task binding is incomplete");
       if (meta.agentServerFingerprint && meta.agentServerFingerprint !== spec.fingerprint)
         throw new Error("ACP Agent configuration changed; this session cannot continue safely");
-      const pendingPermissions = new Map<string, PendingPermission>();
+      const pending = createAcpPendingInteractions();
       let managed: ManagedAcpSession | null = null;
       const observer = this.makeObserver(
         target,
         meta.taskId,
         projection,
         transcript,
-        pendingPermissions,
+        pending,
         () => managed,
       );
       const launch = await this.resolveLaunch(spec);
@@ -284,7 +299,7 @@ export class AcpRuntimeCoordinator {
           acceptedCommandIds: new Set(
             entries.filter((entry) => entry.kind === "prompt").map((entry) => entry.commandId),
           ),
-          pendingPermissions,
+          pending,
         });
         this.active.set(key, managed);
         this.unavailable.delete(key);
@@ -358,21 +373,69 @@ export class AcpRuntimeCoordinator {
   }
 
   snapshot(target: AcpWorkspaceTarget & { taskId: string }): ConversationSnapshot | null {
-    const key = sessionKey(target, target.taskId);
-    return (
-      this.active.get(key)?.projection.snapshot() ?? this.unavailable.get(key)?.snapshot() ?? null
-    );
+    return this.projectionFor(target)?.snapshot() ?? null;
   }
 
   isUnavailable(target: AcpWorkspaceTarget & { taskId: string }): boolean {
-    return this.unavailable.has(sessionKey(target, target.taskId));
+    const rootTaskId = parseAcpSubagentSessionId(target.taskId)?.rootTaskId ?? target.taskId;
+    return this.unavailable.has(sessionKey(target, rootTaskId));
   }
 
   rowsRange(target: AcpWorkspaceTarget & { taskId: string; beforeRowId?: number; limit: number }) {
-    const key = sessionKey(target, target.taskId);
-    const projection = this.active.get(key)?.projection ?? this.unavailable.get(key);
+    const projection = this.projectionFor(target);
     if (!projection) throw new Error("ACP session is not loaded");
     return projection.rowsRange(target.beforeRowId, target.limit);
+  }
+
+  /** 根会话或其虚拟子会话的投影；身份键统一为 workspaceIdentity?.trim() || workspacePath。 */
+  private projectionFor(
+    target: AcpWorkspaceTarget & { taskId: string },
+  ): AcpConversationProjection | null {
+    const virtual = parseAcpSubagentSessionId(target.taskId);
+    const key = sessionKey(target, virtual?.rootTaskId ?? target.taskId);
+    const root = this.active.get(key)?.projection ?? this.unavailable.get(key) ?? null;
+    if (!virtual || !root) return root;
+    return root.childProjection(target.taskId);
+  }
+
+  /** `listSessionSubagents`：ACP 根会话与虚拟子会话的直接子会话目录。 */
+  listSubagents(
+    target: AcpWorkspaceTarget & { taskId: string; endedCursor?: string; endedLimit?: number },
+  ) {
+    const virtual = parseAcpSubagentSessionId(target.taskId);
+    const key = sessionKey(target, virtual?.rootTaskId ?? target.taskId);
+    const root = this.active.get(key)?.projection ?? this.unavailable.get(key);
+    if (!root) throw new Error("ACP session is not loaded");
+    return root.listSubagents(target.taskId, target.endedCursor, target.endedLimit ?? 20);
+  }
+
+  /**
+   * cancelBackgroundWork：AIR 异步任务 → `_session/async_task/stop`；Pi 子任务 → `_lody/subagents/cancel`。
+   * Agent 未停止任何任务、工作未知或已结束时返回拒绝原因，不伪造成功。
+   */
+  async cancelBackgroundWork(
+    target: AcpWorkspaceTarget & { taskId: string; workId: string },
+  ): Promise<{ accepted: true } | { accepted: false; reason: string }> {
+    const managed = this.active.get(sessionKey(target, target.taskId));
+    const sessionId = managed?.connection.sessionId;
+    if (!managed || !sessionId) return { accepted: false, reason: "not_found" };
+    const work = managed.projection.backgroundWorkTarget(target.workId);
+    if (!work) return { accepted: false, reason: "not_found" };
+    if (!work.running) return { accepted: false, reason: "not_running" };
+    if (!work.cancellable) return { accepted: false, reason: "cancel_not_supported" };
+    if (work.kind === "lodyTask") {
+      await managed.connection.extRequest("_lody/subagents/cancel", {
+        sessionId,
+        taskId: target.workId,
+      });
+      return { accepted: true };
+    }
+    const result = await managed.connection.extRequest("_session/async_task/stop", {
+      sessionId,
+      asyncTaskId: target.workId,
+    });
+    const stopped = (result as { stopped?: unknown } | null)?.stopped;
+    return stopped === false ? { accepted: false, reason: "not_running" } : { accepted: true };
   }
 
   async readAttachment(
@@ -434,6 +497,8 @@ export class AcpRuntimeCoordinator {
   async hasAcceptedCommand(
     target: AcpWorkspaceTarget & { taskId: string; commandId: string },
   ): Promise<boolean> {
+    // 虚拟子会话只读，不接纳任何命令。
+    if (parseAcpSubagentSessionId(target.taskId)) return false;
     const managed = this.active.get(sessionKey(target, target.taskId));
     if (managed) return managed.acceptedCommandIds.has(target.commandId);
     const transcript = new AcpTranscriptStore(
@@ -507,20 +572,40 @@ export class AcpRuntimeCoordinator {
   respondPermission(
     target: AcpWorkspaceTarget & { taskId: string; interactionId: string; optionId?: string },
   ): boolean {
+    return this.respondInteraction({
+      ...target,
+      answer: target.optionId ? { optionId: target.optionId } : {},
+    });
+  }
+
+  /** resolveInteraction：form elicitation 按原 schema 回写；其余按权限 optionId 回传。 */
+  respondInteraction(
+    target: AcpWorkspaceTarget & {
+      taskId: string;
+      interactionId: string;
+      answer: AcpInteractionAnswer;
+    },
+  ): boolean {
     const managed = this.active.get(sessionKey(target, target.taskId));
+    const elicitation = managed?.pendingElicitations.get(target.interactionId);
+    if (managed && elicitation) {
+      managed.pendingElicitations.delete(target.interactionId);
+      managed.projection.settleInteraction(target.interactionId);
+      this.publish(managed);
+      elicitation.resolve(answerAcpElicitation(elicitation.plan, target.answer));
+      return true;
+    }
+    const optionId = target.answer.optionId;
     const pending = managed?.pendingPermissions.get(target.interactionId);
     if (!pending) return false;
-    if (
-      target.optionId &&
-      !pending.request.options.some((option) => option.optionId === target.optionId)
-    )
+    if (optionId && !pending.request.options.some((option) => option.optionId === optionId))
       return false;
     managed?.pendingPermissions.delete(target.interactionId);
-    managed?.projection.settlePermission(target.interactionId);
+    managed?.projection.settleInteraction(target.interactionId);
     if (managed) this.publish(managed);
     pending.resolve(
-      target.optionId
-        ? { outcome: { outcome: "selected", optionId: target.optionId } }
+      optionId
+        ? { outcome: { outcome: "selected", optionId } }
         : { outcome: { outcome: "cancelled" } },
     );
     return true;
@@ -559,7 +644,7 @@ export class AcpRuntimeCoordinator {
     taskId: string,
     projection: AcpConversationProjection,
     transcript: AcpTranscriptStore,
-    pending: Map<string, PendingPermission>,
+    pending: AcpPendingInteractions,
     current: () => ManagedAcpSession | null,
   ) {
     return createAcpSessionObserver({
@@ -614,6 +699,10 @@ export class AcpRuntimeCoordinator {
     await managed.transcript.flush();
     await managed.transcript.appendTurnEnd(result);
     managed.projection.finishTurn(result);
+    reconcilePendingInteractions(managed.projection, {
+      permissions: managed.pendingPermissions,
+      elicitations: managed.pendingElicitations,
+    });
     managed.activeCommandId = null;
     managed.meta = {
       ...managed.meta,

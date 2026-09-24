@@ -3784,6 +3784,17 @@ export function createZCodeAgentService(
     },
 
     async listSessionSubagents(params: ZCodeAgentListSessionSubagentsParams) {
+      // ACP 根会话（及其虚拟子会话）的子智能体目录由 ACP 投影应答，不能转给 ZCode CLI。
+      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId })) {
+        return zcodeSessionSubagentsResultSchema.parse(
+          await acpV4Bridge.listSubagents({
+            ...params,
+            taskId: params.sessionId,
+            endedCursor: params.endedCursor,
+            endedLimit: params.endedLimit ?? 20,
+          }),
+        );
+      }
       const client = await getReadOnlyClient(params);
       return client.request(
         zcodeProtocolMethods.sessionSubagents,

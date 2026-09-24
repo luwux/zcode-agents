@@ -1,15 +1,19 @@
 import {
   conversationSnapshotSchema,
+  type BackgroundWorkSummary,
   type ConversationRow,
   type ConversationSnapshot,
+  type GoalState,
   type PendingInteraction,
   type PlanState,
+  type SubagentProjectionState,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentRuntimeId } from "@zcode/shared";
 import type { SessionModeState } from "@agentclientprotocol/sdk";
 
 const HISTORY_WINDOW_ROWS = 60;
 const UNSUPPORTED = { allowed: false as const, reasonCode: "acpCapabilityUnsupported" };
+const READ_ONLY = { allowed: false as const, reasonCode: "acpSubagentReadOnly" };
 
 /** 将 ACP 持有的只读状态映射到现有 V4 会话视图。 */
 export function buildAcpProjectionSnapshot(input: {
@@ -27,7 +31,12 @@ export function buildAcpProjectionSnapshot(input: {
   modes?: SessionModeState | null;
   permissions: PendingInteraction[];
   plan: PlanState | null;
+  goal?: GoalState | null;
   rows: ConversationRow[];
+  /** 子智能体虚拟会话：只读，不接纳输入与配置命令。 */
+  readOnly?: boolean;
+  backgroundWorks?: BackgroundWorkSummary[];
+  subagents?: SubagentProjectionState;
   unavailableReason?: string | null;
   lastError?: {
     code: string;
@@ -38,6 +47,7 @@ export function buildAcpProjectionSnapshot(input: {
   } | null;
 }): ConversationSnapshot {
   const { phase } = input;
+  const readOnly = input.readOnly === true;
   return conversationSnapshotSchema.parse({
     protocolVersion: 1,
     sessionId: input.taskId,
@@ -47,8 +57,8 @@ export function buildAcpProjectionSnapshot(input: {
     control: {
       phase,
       sessionEnded: phase !== "draft" && phase !== "running",
-      canStop: phase === "running",
-      stopState: phase === "running" ? "stoppable" : "idle",
+      canStop: phase === "running" && !readOnly,
+      stopState: phase === "running" && !readOnly ? "stoppable" : "idle",
       stopTargetKind: phase === "running" ? "assistant" : "unknown",
       activeWorks: [],
       lastError: input.unavailableReason
@@ -65,8 +75,9 @@ export function buildAcpProjectionSnapshot(input: {
     availability: {
       fork: UNSUPPORTED,
       compact: UNSUPPORTED,
-      switchModelConfig:
-        phase === "running" || input.unavailableReason
+      switchModelConfig: readOnly
+        ? READ_ONLY
+        : phase === "running" || input.unavailableReason
           ? {
               allowed: false,
               reasonCode: input.unavailableReason ? "acpRuntimeUnavailable" : "acpTurnRunning",
@@ -78,11 +89,13 @@ export function buildAcpProjectionSnapshot(input: {
       pauseGoal: UNSUPPORTED,
       resumeGoal: UNSUPPORTED,
     },
-    inputRouting: input.unavailableReason
-      ? { mode: "reject", reasonCode: "acpRuntimeUnavailable" }
-      : phase === "running"
-        ? { mode: "reject", reasonCode: "acpTurnRunning" }
-        : { mode: "startNow" },
+    inputRouting: readOnly
+      ? { mode: "reject", reasonCode: "acpSubagentReadOnly" }
+      : input.unavailableReason
+        ? { mode: "reject", reasonCode: "acpRuntimeUnavailable" }
+        : phase === "running"
+          ? { mode: "reject", reasonCode: "acpTurnRunning" }
+          : { mode: "startNow" },
     meta: {
       title: input.title,
       titleSource: "default",
@@ -124,9 +137,9 @@ export function buildAcpProjectionSnapshot(input: {
     queue: { items: [], autoDrain: true },
     pendingInteractions: input.permissions,
     pendingCommands: [],
-    backgroundWorks: [],
-    subagents: { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
-    goal: null,
+    backgroundWorks: input.backgroundWorks ?? [],
+    subagents: input.subagents ?? { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
+    goal: input.goal ?? null,
     plan: input.plan,
     workspaceHookAdmission: null,
     rows: {
