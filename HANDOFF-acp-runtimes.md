@@ -114,17 +114,27 @@ CodeZ's existing provider list and model picker; do not build new UI.
    `pnpm architecture:check --changed`. Add an openspec change describing the work, following the
    existing archive format.
 
-## Final task (after the PR): research phone <-> desktop sync
+## Final task (after the PR): phone <-> desktop sync — research, then adapt if a good fit exists
 
-Research (do not implement) mature open-source projects that give Lody-like **bidirectional mobile +
-desktop sync** for coding-agent sessions: start a conversation on the phone and the desktop sees it live
-and vice versa, both can send messages and approve permissions. Candidates to verify: slopus/happy,
-tiann/hapi, getpaseo/paseo, omnara-ai/omnara, siteboon/claudecodeui, iOfficeAI/AionUi, Lody's open parts,
-ACP-native remote options, and ZCode's own remote/mobile feature (codez mentions a
-`web-remote-replayable` projection and `remoteSessionId`). For each: license, stars/activity, supported
-agents, sync architecture (relay / CRDT / E2E, self-hostable server?), and how reusable its sync layer is
-for this Electron app. Write the findings and a recommendation to `docs/research/mobile-sync.md` and link
-it in the PR.
+Goal: Lody-like **bidirectional mobile + desktop sync** for coding-agent sessions — start a conversation
+on the phone and the desktop sees it live and vice versa; both can send messages and approve permissions.
+
+1. **Research (use a subagent).** Evaluate mature open-source options: slopus/happy, tiann/hapi,
+   getpaseo/paseo, omnara-ai/omnara, siteboon/claudecodeui, iOfficeAI/AionUi, Lody's open parts,
+   ACP-native remote options, and ZCode's own remote/mobile feature (codez mentions a
+   `web-remote-replayable` projection and `remoteSessionId` — extending it may beat importing a new
+   stack). For each: license (must be compatible with Apache-2.0), stars/activity/releases, supported
+   agents, sync architecture (relay / CRDT / E2E, self-hostable server?), and how reusable the sync layer
+   is for this Electron app. Write findings + recommendation to `docs/research/mobile-sync.md`.
+2. **Adapt (only if a good fit exists).** If one option is mature, license-compatible, self-hostable and
+   reusable as a library/protocol, integrate its sync logic in **separate new commits** on a follow-up
+   branch (`feat/mobile-sync`, PR stacked on the ACP PR): bridge CodeZ's ACP session projection (V4 rows,
+   permission requests, prompts) into that sync layer so both ends are first-class. Split the work across
+   subagents where it parallelizes (e.g. protocol/adapter, session-state mapping, tests), with one
+   integrating agent owning the final result. Backend/sync logic only; reuse whatever mobile client the
+   chosen project already provides instead of building UI. Test with two clients against a local relay
+   (both directions, including a permission approval). If nothing fits well, stop at the research doc and
+   explain why.
 
 ## Hard rules
 
