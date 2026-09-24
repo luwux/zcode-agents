@@ -44,10 +44,31 @@ CodeZ's existing provider list and model picker; do not build new UI.
    - Model / effort / mode switching goes through `session/set_config_option` (already in CodeZ).
    - Secrets: encrypted at rest (reuse ZCode's provider key storage or Electron `safeStorage`), injected
      only into the child env at spawn, never logged, never in cache keys or diagnostics.
-4. **Isolation.** BYOK configs get private `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / Pi config dir under the
+4. **Subscription login for Claude Code and Codex** (in addition to BYOK). Each agent config has an
+   auth mode: `byok` (task 3) or `subscription` (the user signs in to their own Claude / ChatGPT account;
+   credentials live in the CLI's own store, CodeZ never sees or copies tokens).
+   - Use the ACP auth flow: read `authMethods` from `initialize`, surface an auth-required state on the
+     provider card (CodeZ already shows install/auth/handshake status), and call `authenticate` with the
+     chosen method. Declare the terminal-auth client capability so the adapter can run the CLI's own
+     login (Lody: `auth.terminal`; it uses `claude auth login` and `codex login --device-auth`).
+   - Claude Code: `claude auth login` (Claude subscription). Codex: `codex login` (ChatGPT sign-in) and
+     `codex login --device-auth` for headless/remote hosts; codex-acp exposes a `chatgpt` auth method.
+   - Each subscription config gets its own managed `CLAUDE_CONFIG_DIR` / `CODEX_HOME` under the CodeZ data
+     root, so login is per config and never touches the user's global CLI state. Verify where Claude Code
+     keeps credentials on macOS when `CLAUDE_CONFIG_DIR` is set (Keychain entry naming) and document it.
+     An explicit opt-in "use my existing CLI login" config may point at the user's global home instead.
+   - Subscription mode must strip all BYOK routing/auth env vars (`ANTHROPIC_BASE_URL`,
+     `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`, …) so a stray key
+     never overrides the subscription.
+   - Logout / re-login / expired-token handling: detect auth errors from `session/prompt`, flip the card
+     back to auth-required, never silently fall back to another runtime or to BYOK.
+   - Tests: unit-test method selection, env stripping and state transitions with a fake ACP agent. A real
+     subscription sign-in needs the owner's interactive login, so it is verified locally on the Mac, not
+     in the cloud; write down the exact manual steps.
+5. **Isolation.** BYOK configs get private `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / Pi config dir under the
    CodeZ data root; only an explicit "use my CLI login" config may share the user's global homes. Env
    allowlist, loopback in `NO_PROXY`.
-5. **Offline replay harness + e2e tests** (`scripts/acp-replay/`):
+6. **Offline replay harness + e2e tests** (`scripts/acp-replay/`):
    - A local proxy that speaks **Anthropic Messages (SSE)** and **OpenAI Responses (SSE)** and replays a
      fixture regardless of the prompt: one recorded model response per request, advancing on each
      request (a tool-result follow-up is a new request), paced by the fixture's `t_ms` with a speed
@@ -55,7 +76,7 @@ CodeZ's existing provider list and model picker; do not build new UI.
    - Fixtures: `fixtures/claude-code.json` (2 turns, 8 Bash/Read calls) and `fixtures/codex.json`
      (2 turns, 27 exec_command/write_stdin calls), sanitized from real sessions with
      `sanitize-sessions.mjs` (text masked by character class, commands replaced by read-only ones).
-     They are pushed to this branch **after the owner reviews them** — `git pull` before task 5; until
+     They are pushed to this branch **after the owner reviews them** — `git pull` before task 6; until
      then build against the format produced by `sanitize-sessions.mjs`. Add a Pi fixture in the same format.
    - E2E: install the real CLIs + adapters into a temp dir, point them at the proxy (base URL + dummy
      key via the BYOK path above), drive them through CodeZ's ACP client, assert the V4 projection
@@ -63,7 +84,7 @@ CodeZ's existing provider list and model picker; do not build new UI.
      (non-bypass) permission mode.
    - Tests run with network egress blocked except loopback (e.g. `unshare -rn` / bwrap on Linux); the
      workspace is a throwaway git repo; nothing deletes or rewrites files outside it.
-6. **Live BYOK smoke test via OpenRouter** (primary proof that the BYOK path works for real):
+7. **Live BYOK smoke test via OpenRouter** (primary proof that the BYOK path works for real):
    model `xiaomi/mimo-v2.6-flash` (tool calling supported; ~$0.14 / $0.28 per M tokens), key from the
    `OPENROUTER_API_KEY` environment variable of the cloud environment — never commit, print or log it;
    skip the live tests cleanly when the variable is absent.
@@ -75,8 +96,21 @@ CodeZ's existing provider list and model picker; do not build new UI.
    - Pi: built-in `openrouter` provider, `--model xiaomi/mimo-v2.6-flash`.
    - Each runtime completes one small task in a throwaway workspace (read a file, run a harmless command,
      answer) through CodeZ's ACP backend. Keep token usage minimal; record the cost in the PR description.
-   The replay harness (task 5) stays for deterministic, offline CI; the live test is opt-in.
-7. **Quality gates:** target package tests, `pnpm typecheck`, `pnpm lint`,
+   The replay harness (task 6) stays for deterministic, offline CI; the live test is opt-in.
+8. **Desktop end-to-end test driven over CDP.** Launch the real CodeZ Electron app with
+   `--remote-debugging-port` (on Linux under `xvfb-run`) and drive it through the Chrome DevTools Protocol
+   (Playwright `_electron` or a thin CDP client) with **real user actions only** — clicks and typing via
+   `Input.dispatch*` / locators, never calling React internals or fiber props. For each runtime: pick it
+   in the existing model picker, send a prompt, watch the streamed rows and tool-call cards, answer the
+   permission prompt, wait for completion, and assert on the rendered DOM. Save screenshots and the CDP
+   log as test artifacts.
+   - Run it against the replay proxy (always) and against OpenRouter with the owner's key (task 7) for
+     every runtime the environment can actually run. Live tests need egress to `openrouter.ai`; if the
+     cloud environment's network policy blocks it, say so.
+   - If a runtime (for example Claude Code) or Electron itself cannot run in the cloud environment, skip
+     that case with an explicit reason in the test output and the PR description instead of faking it.
+     The owner will run the same CDP suite locally on macOS.
+9. **Quality gates:** target package tests, `pnpm typecheck`, `pnpm lint`,
    `pnpm architecture:check --changed`. Add an openspec change describing the work, following the
    existing archive format.
 
@@ -88,7 +122,11 @@ CodeZ's existing provider list and model picker; do not build new UI.
 
 ## Done when
 
-Each of Claude Code, Codex and Pi can be selected as a provider, uses a BYOK config pointed at the
-replay proxy, and completes a replayed multi-turn session with tool calls and a permission prompt,
-end to end through CodeZ's ACP backend, with all quality gates green. Final GUI verification of the
-macOS desktop app happens locally afterwards.
+- Claude Code, Codex and Pi can each be selected as a provider and complete a replayed multi-turn session
+  with tool calls and a permission prompt through CodeZ's ACP backend (task 6).
+- The BYOK path is proven with real OpenRouter requests for every runtime the cloud can run (task 7).
+- The CDP suite drives the real desktop app through the same flows, with screenshots, or each skipped
+  case states why (task 8).
+- Claude Code and Codex support subscription login per config, with unit tests and documented manual
+  steps for the owner's local sign-in check (task 4).
+- All quality gates are green; a PR against `main` lists test results, skipped cases and OpenRouter cost.
