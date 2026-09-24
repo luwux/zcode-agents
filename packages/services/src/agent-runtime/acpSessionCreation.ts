@@ -1,5 +1,6 @@
 import { ACP_DEFAULT_MODEL_ID, type AgentRuntimeId, type ZCodeTaskMeta } from "@zcode/shared";
 import { getZCodeDataRootDir } from "#src/paths.js";
+import { createServiceLogger } from "#src/logger/serviceLogger.js";
 import { AcpConnection, type AcpSessionObserver } from "#src/agent-runtime/acpConnection.js";
 import { AcpConversationProjection } from "#src/agent-runtime/acpConversationProjection.js";
 import {
@@ -15,6 +16,8 @@ import {
 import { AcpTranscriptStore } from "#src/agent-runtime/acpTranscriptStore.js";
 import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
 import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
+
+const logger = createServiceLogger("acp-session-creation");
 
 /** 建立 ACP 原生会话、持久绑定和工作台投影；失败时回收进程。 */
 export async function createAcpManagedSession(input: {
@@ -76,8 +79,20 @@ export async function createAcpManagedSession(input: {
     }
   });
   try {
-    if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID)
-      await connection.setModel(input.modelId);
+    if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID) {
+      try {
+        await connection.setModel(input.modelId);
+      } catch (error) {
+        // 修复原因：Claude 适配器的模型列表来自本机 Claude CLI 的目录，不同机器/版本公布的选项 ID 不同，
+        // 输入框里缓存的选项可能不在本次会话的列表中。此时沿用 Agent 当前（默认）模型建会话，而不是让发送失败；
+        // BYOK 配置的默认槽位就是用户的第一个模型。其他错误照常抛出。
+        if (!(error instanceof Error) || error.message !== "ACP model is unavailable") throw error;
+        logger.warn("requested ACP model is not offered; keeping the agent's current model", {
+          runtimeId: input.runtimeId,
+          modelId: input.modelId,
+        });
+      }
+    }
     if (input.thoughtLevel) await connection.setThinkingLevel(input.thoughtLevel);
     if (input.modeId) await connection.setMode(input.modeId);
     projection.setModelOptions(connection.modelOptions());
