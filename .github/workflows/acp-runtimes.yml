@@ -75,7 +75,7 @@ jobs:
   live-openrouter:
     name: Live BYOK tasks (OpenRouter, MiMo v2.6 Flash)
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 100
     # The key is exposed only to the three steps that need it (never to install or third-party steps).
     steps:
       - uses: actions/checkout@v4

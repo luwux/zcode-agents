@@ -56,6 +56,10 @@ export interface LiveCase {
   configEnv?: Record<string, string>;
   /** Exact bounds only where the mode guarantees them (bypass: 0). */
   maxPermissions?: number;
+  /** Ask modes where the task must hit an approval (Claude writes, Codex network escalation). */
+  minPermissions?: number;
+  /** Steer the running turn once the first tool call shows up (live check of mid-turn guide). */
+  steer?: boolean;
   /** Use the runtime's preset directly even in record mode (covers Pi's built-in provider). */
   unrecorded?: boolean;
 }
@@ -71,14 +75,25 @@ const PROMPTS: Record<LiveTask, string> = {
     "phone / remote control works: search the code for `web-remote-replayable`, `AttachServicePort` " +
     "and `remoteSessionId`, and read docs/research/mobile-sync.md. Do not modify files. Reply with at " +
     "most 6 bullets explaining how a phone would connect to the desktop Host and what is still missing, " +
-    "citing the file paths you actually read.",
+    "citing the file paths you actually read. Use at most 12 tool calls.",
   internet:
     "Use the internet to research this (for example `curl -sL <url>` in the shell, or your web fetch " +
     "tool): does ZCode (https://github.com/zai-org/ZCode) support remote control from a phone, is there " +
     "an iOS client, and how do you connect ZCode's remote connector? Start from " +
     "https://raw.githubusercontent.com/zai-org/ZCode/main/README.md and the GitHub search API " +
-    "(https://api.github.com/search/repositories?q=zcode+remote). Do not modify files. Reply with your " +
-    "findings and list every URL you actually fetched.",
+    "(https://api.github.com/search/repositories?q=zcode+remote). Do not modify files. Fetch at most 6 " +
+    "URLs, then reply with your findings and list every URL you actually fetched.",
+};
+
+const STEER_PROMPT =
+  "Change of plan while you work: also add a <footer> containing the exact text 'steered by CodeZ' " +
+  "to site/index.html.";
+
+/** 研究任务在 MiMo 上单次响应可达 40-100s，工具调用多；网站任务很短。 */
+const TURN_TIMEOUT_MS: Record<LiveTask, number> = {
+  website: 300_000,
+  harness: 900_000,
+  internet: 900_000,
 };
 
 export function providerFor(
@@ -139,7 +154,8 @@ function pathOf(request: RequestPermissionRequest, workspace: string): string | 
 export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): void {
   for (const liveCase of cases) {
     const name = `live ${MODEL}: ${runtime} ${liveCase.task} @ ${liveCase.modeId ?? "default"} (${liveCase.label})`;
-    test(name, { skip, timeout: 600_000 }, async () => {
+    const turnTimeout = TURN_TIMEOUT_MS[liveCase.task];
+    test(name, { skip, timeout: turnTimeout + 120_000 }, async () => {
       const root = await mkdtemp(join(tmpdir(), `codez-live-${runtime}-${liveCase.task}-`));
       setDataBaseDir(join(root, "data"));
       const workspace = await makeWorkspace(root, liveCase.task);
@@ -213,14 +229,50 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           commandId: "live-1",
           text: PROMPTS[liveCase.task],
         });
+        const task = { ...target, taskId: meta.taskId };
+        let steerDelivery: string | null = null;
+        if (liveCase.steer) {
+          // 首个工具调用出现时回合必在运行：此时发送的消息走 guide（引导）而不是被拒绝。
+          await waitFor(
+            () =>
+              coordinator!
+                .rowsRange({ ...task, limit: 10_000 })
+                .rows.some((row) => row.kind === "toolCall") ||
+              coordinator!.snapshot(task)?.control.phase !== "running",
+            turnTimeout,
+            "first tool call",
+          );
+          const routing = coordinator.snapshot(task)?.inputRouting.mode;
+          if (coordinator.snapshot(task)?.control.phase === "running")
+            assert.equal(routing, "guide", "a running built-in runtime accepts guide input");
+          assert.equal(
+            await coordinator.sendPrompt({ ...task, commandId: "live-steer", text: STEER_PROMPT }),
+            "accepted",
+          );
+        }
+        // 引导回退为排队时，协调器在回合收尾前等待引导结果并立即启动下一回合，因此
+        // “不在运行 + 引导输入行已存在”即表示引导内容已被处理。
         await waitFor(
           () =>
-            coordinator!.snapshot({ ...target, taskId: meta.taskId })?.control.phase !== "running",
-          540_000,
+            coordinator!.snapshot(task)?.control.phase !== "running" &&
+            (!liveCase.steer ||
+              coordinator!
+                .rowsRange({ ...task, limit: 10_000 })
+                .rows.some(
+                  (row) => row.kind === "userInput" && row.sourceCommandId === "live-steer",
+                )),
+          turnTimeout,
           "live turn",
         );
-        const snapshot = coordinator.snapshot({ ...target, taskId: meta.taskId })!;
-        const { rows } = coordinator.rowsRange({ ...target, taskId: meta.taskId, limit: 10_000 });
+        const snapshot = coordinator.snapshot(task)!;
+        const { rows } = coordinator.rowsRange({ ...task, limit: 10_000 });
+        if (liveCase.steer) {
+          const inputs = rows.filter((row) => row.kind === "userInput");
+          const original = inputs.find((row) => row.sourceCommandId === "live-1");
+          const steered = inputs.find((row) => row.sourceCommandId === "live-steer");
+          steerDelivery =
+            steered && original && steered.turnId === original.turnId ? "guide" : "queued";
+        }
         const answer = rows
           .filter((row) => row.kind === "assistantText")
           .map((row) => (row as { text: string }).text)
@@ -237,6 +289,7 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           model: MODEL,
           seed: SEED,
           phase: snapshot.control.phase,
+          steerDelivery,
           lastError: (snapshot.control as { lastError?: unknown }).lastError ?? null,
           decisions,
           tools: tools.map(({ toolName, status, inputText }) => ({
@@ -253,7 +306,8 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
         // 研究类任务的结论直接打印到测试输出，便于在 CI 日志中阅读（只有模型输出，无凭据）。
         console.log(
           `\n===== ${name}\nphase=${report.phase} tools=${tools.length} prompts=${permissions.length} ` +
-            `rejected=${decisions.filter((d) => d.decision === "reject").length}\n${answer.slice(0, 3000)}\n=====`,
+            `rejected=${decisions.filter((d) => d.decision === "reject").length}` +
+            `${steerDelivery ? ` steer=${steerDelivery}` : ""}\n${answer.slice(0, 3000)}\n=====`,
         );
 
         assert.notEqual(snapshot.control.phase, "error", JSON.stringify(report.lastError));
@@ -262,6 +316,11 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           assert.ok(
             permissions.length <= liveCase.maxPermissions,
             `<= ${liveCase.maxPermissions} prompts: ${JSON.stringify(decisions)}`,
+          );
+        if (liveCase.minPermissions !== undefined)
+          assert.ok(
+            permissions.length >= liveCase.minPermissions,
+            `ask mode asked at least ${liveCase.minPermissions} time(s): ${JSON.stringify(decisions)}`,
           );
         const exists = (path: string) =>
           access(join(workspace, path)).then(
@@ -282,6 +341,7 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           const html = await readFile(join(workspace, "site/index.html"), "utf8");
           assert.match(html, /CodeZ Live Test/);
           assert.match(await readFile(join(workspace, "site/script.js"), "utf8"), /ready/);
+          if (liveCase.steer) assert.match(html, /steered by CodeZ/i, "the steer was followed");
         }
         if (liveCase.task === "harness") {
           assert.match(

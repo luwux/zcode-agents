@@ -1,7 +1,7 @@
 /**
  * Test-side "user" that answers ACP permission prompts in ask modes. A rule policy always runs
- * first and can only deny; the optional model judge (OpenRouter, same model as the live tests)
- * decides the remaining requests. Nothing here widens permissions beyond the throwaway workspace.
+ * first and can only deny; the seeded random judge decides the remaining requests (about 1 in 5
+ * rejected). Nothing here widens permissions beyond the throwaway workspace.
  */
 import { isAbsolute, relative, resolve } from "node:path";
 import type { RequestPermissionRequest, RequestPermissionResponse } from "@agentclientprotocol/sdk";

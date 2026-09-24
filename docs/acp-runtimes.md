@@ -116,7 +116,9 @@ a steering method keep the old behavior (the composer blocks sending while a tur
   fallback metadata" and some models (MiMo v2.6 Flash in live runs) occasionally end a turn with reasoning
   only, without a final message.
 - **Codex modes:** the default "agent" mode sends approvals to Codex's Guardian reviewer model (billed like
-  any request); "read-only" ("Ask for approval") asks the user; "agent-full-access" never asks.
+  any request); "read-only" is shown as "Ask for approval" and, despite its id, runs with a workspace-write
+  sandbox: edits inside the workspace happen without asking, while network access and files outside the
+  workspace ask the user; "agent-full-access" never asks.
 
 ## Tests
 
