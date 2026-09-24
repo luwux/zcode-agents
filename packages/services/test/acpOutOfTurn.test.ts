@@ -167,7 +167,7 @@ test("out-of-turn content is dropped without background work and attributed to r
     200_002,
   );
   assert.equal(projection.snapshot().backgroundWorks[0]?.status, "cancelled");
-  // 终态单调：stopped 之后的 running 不会恢复。
+  // 终态不回到运行中：stopped 之后的 running 不会恢复。
   projection.applyUpdate(
     {
       sessionId: ROOT,
@@ -176,6 +176,15 @@ test("out-of-turn content is dropped without background work and attributed to r
     200_003,
   );
   assert.equal(projection.snapshot().backgroundWorks[0]?.status, "cancelled");
+  // 实录（claude-agent-acp 0.81.2）：尽力而为的 "stopped" 之后由权威的 "completed" 更正，后到终态为准。
+  projection.applyUpdate(
+    {
+      sessionId: ROOT,
+      update: { sessionUpdate: "async_task_state_update", asyncTaskId: "wf-1", state: "completed" },
+    },
+    200_004,
+  );
+  assert.equal(projection.snapshot().backgroundWorks.length, 0);
 });
 
 test("session goal meta projects to snapshot.goal with a goalSet marker inside a turn", () => {

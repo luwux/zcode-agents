@@ -62,12 +62,22 @@ export class AcpBackgroundWorkTracker {
     if (update.toolCallId && !existing.toolCallId) existing.toolCallId = update.toolCallId;
     if (update.sessionUpdate === "async_task_progress") {
       if (!existing.named && update.description?.trim()) existing.title = update.description.trim();
-    } else if (existing.status === "running") {
-      // 终态单调：completed/failed/stopped 之后的 running/paused 不再恢复。
-      if (update.state === "completed") existing.status = "completed";
-      else if (update.state === "failed") existing.status = "failed";
-      else if (update.state === "stopped") existing.status = "cancelled";
-      if (existing.status !== "running") existing.endedAt = at;
+    } else {
+      // 终态不回到运行中（running/paused 在终态后忽略）。终态之间以后到者为准：实测 claude-agent-acp
+      // 先发尽力而为的 level 事件 "stopped"，随后用权威的 "completed" 更正（async-tasks.js finish()），
+      // 若把 stopped 当作不可改写，正常完成的任务会被永久显示为已取消。
+      const terminal =
+        update.state === "completed"
+          ? "completed"
+          : update.state === "failed"
+            ? "failed"
+            : update.state === "stopped"
+              ? "cancelled"
+              : null;
+      if (terminal && terminal !== existing.status) {
+        existing.status = terminal;
+        existing.endedAt = at;
+      }
     }
     return {
       workId: existing.workId,

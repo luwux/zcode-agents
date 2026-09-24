@@ -92,6 +92,11 @@ SHALL 拒绝命令而不是报告成功。
 - **WHEN** 用户在状态面板停止运行中的后台 Bash 任务
 - **THEN** CodeZ 发送 `_session/async_task/stop`，Agent 随后的 `stopped` 状态使该任务显示为已取消
 
+#### Scenario: Best-effort stopped corrected by completion
+
+- **WHEN** Agent 先报告后台任务 `stopped`，随后报告同一任务 `completed`
+- **THEN** 以后到的终态为准，任务按已完成从 `backgroundWorks` 移除；终态之后的 `running` 仍被忽略
+
 ### Requirement: ACP form elicitation
 
 CodeZ SHALL 声明 `elicitation.form` 并把 `elicitation/create` 呈现为现有的问答对话框；用户答案 SHALL 按原 schema

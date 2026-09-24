@@ -60,7 +60,8 @@ sequenceDiagram
   只读 snapshot 或发命令。
 - 幂等键：子会话 = 原生 S（重复 spawn 忽略，`S:generation:N` 是新子会话）；后台任务 = `asyncTaskId`；
   Pi 任务 = `taskId`；表单 = `acp-elicitation:<uuid>`；子权限 = `acp-subagent:<S>:<toolCallId>`。
-- 终态单调：子智能体/后台任务进入终态后不再回到运行中；迟到的终态重复更新忽略。
+- 终态单调：子智能体/后台任务进入终态后不再回到运行中；子智能体迟到的终态重复更新忽略。后台任务的终态之间以后到者为准：
+  实测 claude-agent-acp 0.81.2 先发尽力而为的 `stopped`（level 事件），随后用权威的 `completed` 更正。
 
 ### D2 转录与回放
 

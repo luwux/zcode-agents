@@ -207,3 +207,69 @@ test(
     });
   },
 );
+
+test(
+  "claude-code background Bash is projected through AIR async tasks",
+  { skip: replaySkip, timeout: 240_000 },
+  async () => {
+    await withClaude("claude-code-background.json", async (run) => {
+      const task = { ...run.target, taskId: run.taskId };
+      await run.coordinator.sendPrompt({
+        ...task,
+        commandId: "bg",
+        text: "Run the slow check in the background.",
+      });
+      let sawRunningWork = false;
+      await waitFor(
+        () => {
+          const snapshot = run.coordinator.snapshot(task);
+          if (snapshot?.backgroundWorks.some((work) => work.status === "running"))
+            sawRunningWork = true;
+          return snapshot?.control.phase !== "running";
+        },
+        180_000,
+        "turn completion",
+      );
+      assert.ok(sawRunningWork, "async_task_spawned surfaced a running background work");
+      const bash = run.coordinator
+        .snapshot(task)!
+        .rows.window.find((row) => row.kind === "toolCall" && row.toolName === "Bash");
+      assert.equal(bash?.kind === "toolCall" && bash.backgrounded, true);
+      const workId = bash?.kind === "toolCall" ? bash.workId : undefined;
+      assert.ok(workId, "Bash row is linked to its async task");
+      // 回合结束后后台任务完成（stopped 随后被 completed 更正），Claude 自主续写：回合外内容进展示轮。
+      await waitFor(
+        () =>
+          run.coordinator
+            .snapshot(task)
+            ?.rows.window.some(
+              (row) =>
+                row.kind === "assistantText" && row.text === "The background check finished.",
+            ) === true,
+        60_000,
+        "task-notification follow-up",
+      );
+      await waitFor(
+        () => run.coordinator.snapshot(task)?.backgroundWorks.length === 0,
+        30_000,
+        "completed work leaves backgroundWorks",
+      );
+      const snapshot = run.coordinator.snapshot(task)!;
+      const followUp = snapshot.rows.window.find(
+        (row) => row.kind === "assistantText" && row.text === "The background check finished.",
+      );
+      const header = snapshot.rows.window.find(
+        (row) => row.kind === "turnHeader" && row.turnId === followUp?.turnId,
+      );
+      assert.equal(header?.kind === "turnHeader" && header.origin, "backgroundResult");
+      assert.deepEqual(header?.kind === "turnHeader" && header.originMeta, {
+        backgroundSource: "bash",
+        workId,
+        title: "Slow check",
+      });
+      // 展示轮不改变会话 phase 与回合所有权。
+      assert.equal(snapshot.control.phase, "completedSuccess");
+      assert.equal(snapshot.inputRouting.mode, "startNow");
+    });
+  },
+);
