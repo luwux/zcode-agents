@@ -64,6 +64,12 @@ if (canIsolate) {
   command = "unshare";
   args = ["-rn", "python3", join(here, "loopback-only.py"), process.execPath, ...testArgs];
   console.log("[replay-e2e] running in a loopback-only network namespace");
+} else if (process.env.CI) {
+  // CI 必须满足“仅 loopback”的隔离承诺；无法建立网络命名空间时失败而不是静默降级。
+  console.error(
+    "[replay-e2e] network namespace unavailable in CI; refusing to run without isolation",
+  );
+  process.exit(1);
 } else {
   // 无法创建网络命名空间时退化为死代理：遵守代理变量的客户端无法外连；这不是强隔离。
   Object.assign(env, {

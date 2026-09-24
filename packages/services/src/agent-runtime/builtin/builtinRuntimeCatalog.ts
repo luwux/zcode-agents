@@ -24,6 +24,10 @@ export interface BuiltinRuntimeDefinition {
     paths: readonly string[];
   };
   authModes: readonly AgentAuthMode[];
+  /** 受管原生二进制候选（相对安装目录）；安装发布前与启动时都必须存在其一。 */
+  nativeBinaryCandidates(platform: NodeJS.Platform, arch: string, musl: boolean): string[];
+  /** 适配器本身是否需要 ELECTRON_RUN_AS_NODE 传给其子进程（Pi 以 process.execPath 启动 pi）。 */
+  childrenNeedNodeMode: boolean;
   /** 平台不受支持时的原因；null 表示支持。 */
   unsupportedReason(platform: NodeJS.Platform): string | null;
 }
@@ -38,6 +42,9 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
     lockfile: claudeCodeLock,
     adapterEntry: "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
     authModes: ["subscription", "byok", "cli-login"],
+    nativeBinaryCandidates: (platform, arch, musl) =>
+      claudeNativeBinaryCandidates(platform, arch, musl),
+    childrenNeedNodeMode: false,
     unsupportedReason: () => null,
   },
   codex: {
@@ -47,6 +54,11 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
     lockfile: codexLock,
     adapterEntry: "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
     authModes: ["subscription", "byok", "cli-login"],
+    nativeBinaryCandidates: (platform, arch) => {
+      const candidate = codexNativeBinaryCandidate(platform, arch);
+      return candidate ? [candidate] : [];
+    },
+    childrenNeedNodeMode: false,
     unsupportedReason: () => null,
   },
   pi: {
@@ -61,6 +73,8 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
       paths: ["src", "tsconfig.json", "package.json", "LICENSE"],
     },
     authModes: ["byok", "cli-login"],
+    nativeBinaryCandidates: () => [],
+    childrenNeedNodeMode: true,
     // acp-extension-pi 在 Windows 依赖 CI 预编译的 Job 原生模块；源码安装无法获得，缺失时适配器会拒绝启动。
     unsupportedReason: (platform) =>
       platform === "win32"
@@ -68,6 +82,15 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
         : null,
   },
 };
+
+/** 与 agent_servers 共享命名空间：旧内置 ACP ID 仍用于历史会话恢复，内置配置不得占用。 */
+export const RESERVED_AGENT_IDS: ReadonlySet<string> = new Set([
+  "zcode-cli",
+  "qoder-acp",
+  "cline-acp",
+  "codebuddy-acp",
+  "workbuddy-acp",
+]);
 
 export function isBuiltinAcpRuntime(value: string): value is BuiltinAcpRuntime {
   return (BUILTIN_ACP_RUNTIMES as readonly string[]).includes(value);

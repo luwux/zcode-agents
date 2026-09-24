@@ -76,6 +76,64 @@ export async function isBuiltinRuntimeInstalled(
 
 const inFlight = new Map<string, Promise<string>>();
 
+function isMuslLinux(): boolean {
+  if (process.platform !== "linux") return false;
+  const report = process.report?.getReport() as
+    | { header?: { glibcVersionRuntime?: string } }
+    | undefined;
+  return !report?.header?.glibcVersionRuntime;
+}
+
+function hasNativeBinary(definition: BuiltinRuntimeDefinition): boolean {
+  return definition.nativeBinaryCandidates(process.platform, process.arch, false).length > 0;
+}
+
+/** 返回安装目录内第一个可执行的原生二进制（绝对路径）；没有原生二进制的 Runtime 返回 null。 */
+export async function findNativeBinary(
+  dir: string,
+  definition: BuiltinRuntimeDefinition,
+): Promise<string | null> {
+  for (const candidate of definition.nativeBinaryCandidates(
+    process.platform,
+    process.arch,
+    isMuslLinux(),
+  )) {
+    try {
+      await access(join(dir, candidate), constants.X_OK);
+      return join(dir, candidate);
+    } catch {
+      // 继续下一个候选。
+    }
+  }
+  return null;
+}
+
+/** 删除已发布但缺原生二进制的安装，使下一次 ensure 重新安装。 */
+export async function discardBrokenInstall(
+  root: string,
+  definition: BuiltinRuntimeDefinition,
+): Promise<void> {
+  const target = builtinInstallDir(root, definition);
+  await withFileLock(`${target}.install`, () => rm(target, { recursive: true, force: true }), {
+    lockMaxWaitMs: INSTALL_LOCK_MAX_WAIT_MS,
+  });
+}
+
+// Windows 上杀毒/索引可能短暂占用新目录；与共享持久化相同的退避重试。
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (const delay of [0, 100, 300, 1000, 3000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES") throw error;
+    }
+  }
+  await rename(from, to);
+}
+
 /**
  * 发布语义：只在同级临时目录内安装并校验，完成标记写入后整体 rename；
  * 进程内 promise 去重，目录锁覆盖多个 Host 进程同时首次使用。
@@ -136,18 +194,33 @@ async function installInto(
     // --ignore-scripts：所需原生二进制都以 optionalDependencies 分发，不运行第三方安装脚本。
     const npm = await runArgv(
       process.execPath,
-      [npmCli, "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+      [
+        npmCli,
+        "ci",
+        "--ignore-scripts",
+        // 原生二进制以 optionalDependencies 分发；用户 .npmrc 的 omit=optional 不能让安装“成功但缺二进制”。
+        "--include=optional",
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=error",
+      ],
       { cwd: staging, env: nodeModeEnv(env), timeoutMs: NPM_TIMEOUT_MS },
     );
     if (npm.code !== 0) throw new Error(`npm ci failed (${npm.code}): ${npm.output.trim()}`);
     if (definition.adapterSource) await buildAdapterFromSource(staging, definition, env);
     await access(join(staging, definition.adapterEntry), constants.R_OK);
+    // 修复原因：npm 把可选依赖下载失败视为非致命，只检查适配器入口会发布缺原生二进制的安装，
+    // 之后每次启动都失败且不会自愈。发布前必须找到本平台的原生二进制。
+    if (!(await findNativeBinary(staging, definition)) && hasNativeBinary(definition))
+      throw new Error(
+        `${definition.name} native binary for ${process.platform}-${process.arch} was not installed`,
+      );
     await writeFile(
       join(staging, COMPLETE_MARKER),
       `${JSON.stringify({ runtime: definition.runtime, version: definition.version })}\n`,
     );
     await rm(target, { recursive: true, force: true });
-    await rename(staging, target);
+    await renameWithRetry(staging, target);
     logger.info(undefined, "installed built-in ACP runtime", { runtime: definition.runtime });
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => {});

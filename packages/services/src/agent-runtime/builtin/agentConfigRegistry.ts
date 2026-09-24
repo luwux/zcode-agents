@@ -5,6 +5,7 @@ import { agentRuntimeIdSchema } from "@zcode/shared";
 import { getAppConfigDir } from "#src/paths.js";
 import {
   BUILTIN_RUNTIME_DEFINITIONS,
+  RESERVED_AGENT_IDS,
   isBuiltinAcpRuntime,
   type AgentAuthMode,
   type BuiltinAcpRuntime,
@@ -44,7 +45,8 @@ const DEFAULT_CONFIGS: readonly AgentConfig[] = [
 ].map((config) => ({ ...config, builtinDefault: true }) as AgentConfig);
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
-const SECRET_LIKE = /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/;
+// 只拦截形如密钥的名字；MAX_THINKING_TOKENS、CLAUDE_CODE_MAX_OUTPUT_TOKENS 等普通变量放行。
+const SECRET_LIKE = /(^|_)(API_)?KEY$|(^|_)TOKEN$|SECRET|PASSWORD|CREDENTIAL/;
 /** 这些变量由 Host 负责构造，配置不得覆盖，否则可以绕过 home 隔离或改写启动方式。 */
 export const RESERVED_ENV = new Set([
   "PATH",
@@ -60,6 +62,7 @@ export const RESERVED_ENV = new Set([
   "MODEL_PROVIDER",
   "DEFAULT_AUTH_REQUEST",
   "PI_CODING_AGENT_DIR",
+  "PI_CODING_AGENT_SESSION_DIR",
   "NO_PROXY",
   "no_proxy",
 ]);
@@ -79,24 +82,28 @@ export async function readAgentConfigs(path = getAgentConfigsPath()): Promise<Ag
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       return { path, configs: DEFAULT_CONFIGS, issues: [] };
+    // 修复原因：文件不可读时若回退到默认条目，用户的 BYOK 覆盖会静默变成订阅执行；失败即关闭。
     return {
       path,
-      configs: DEFAULT_CONFIGS,
+      configs: [],
       issues: [{ id: "agents", message: `Configuration could not be read: ${String(error)}` }],
     };
   }
   if (!isRecord(raw) || !isRecord(raw.agents))
     return {
       path,
-      configs: DEFAULT_CONFIGS,
+      configs: [],
       issues: [{ id: "agents", message: "Expected an agents object" }],
     };
   const configs = new Map(DEFAULT_CONFIGS.map((config) => [config.id, config]));
   const issues: AgentConfigIssue[] = [];
   for (const [id, value] of Object.entries(raw.agents)) {
     const parsed = parseAgentConfig(id, value);
-    if (typeof parsed === "string") issues.push({ id, message: parsed });
-    else configs.set(id, parsed);
+    if (typeof parsed === "string") {
+      issues.push({ id, message: parsed });
+      // 覆盖默认 ID 的条目无效时，该 ID 不可用，而不是复活默认配置（同 fingerprint 会接管旧会话）。
+      configs.delete(id);
+    } else configs.set(id, parsed);
   }
   return { path, configs: [...configs.values()], issues };
 }
@@ -107,7 +114,7 @@ export async function findAgentConfig(id: string): Promise<AgentConfig | null> {
 
 /** 返回错误信息字符串或规范化配置；与 agent_servers 一样按 ID 隔离无效项。 */
 export function parseAgentConfig(id: string, value: unknown): AgentConfig | string {
-  if (!agentRuntimeIdSchema.safeParse(id).success || id === "zcode-cli")
+  if (!agentRuntimeIdSchema.safeParse(id).success || RESERVED_AGENT_IDS.has(id))
     return "Invalid or reserved Agent ID";
   if (!isRecord(value)) return "Expected an object";
   const allowed = ["name", "runtime", "auth", "provider", "env"];

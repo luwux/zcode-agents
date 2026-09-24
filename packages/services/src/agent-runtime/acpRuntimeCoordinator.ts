@@ -89,10 +89,21 @@ export class AcpRuntimeCoordinator {
    * authRequired 只翻转该配置的认证状态并返回明确错误；不重试、不切换 Runtime、不回退到 BYOK。
    * 其他错误原样返回。
    */
+  private readonly authModes = new Map<string, string>();
+
+  private rememberAuthMode(spec: AcpRuntimeSpec | null): void {
+    if (spec?.builtin) this.authModes.set(spec.id, spec.builtin.auth);
+  }
+
   private authFailure(runtimeId: string, error: unknown): Error {
     if (!isAcpAuthRequiredError(error))
       return error instanceof Error ? error : new Error(String(error));
-    const message = "Sign-in required: authenticate this ACP provider, then retry";
+    // 修复原因：BYOK 配置的 -32000 来自 Key 被拒（Claude 把 "/login" 提示映射为 authRequired），
+    // 提示「登录」会误导且登录入口对 BYOK 不可用；保留上游细节并提示检查 Key。
+    const message =
+      this.authModes.get(runtimeId) === "byok"
+        ? `API key rejected by the provider: ${describeAcpError(error)}`
+        : "Sign-in required: authenticate this ACP provider, then retry";
     this.authStates.markAuthRequired(runtimeId, message);
     return new Error(message);
   }
@@ -104,6 +115,7 @@ export class AcpRuntimeCoordinator {
       includeAllModelThoughtLevels?: boolean;
     },
   ): Promise<AgentRuntimeConfigPreview> {
+    this.rememberAuthMode(await resolveAcpRuntimeSpec(input.runtimeId));
     try {
       return await discoverAcpRuntimeConfig({
         ...input,
@@ -154,6 +166,7 @@ export class AcpRuntimeCoordinator {
       restoreLegacy: Boolean(input.parentTaskId),
     });
     if (!spec) throw new Error(`Unsupported ACP Runtime ${input.runtimeId}`);
+    this.rememberAuthMode(spec);
     const existing = await this.taskIndex.getTaskMeta({ ...input, taskId: input.commandId });
     if (existing) {
       if (existing.runtimeId !== input.runtimeId)
@@ -219,6 +232,7 @@ export class AcpRuntimeCoordinator {
         restoreLegacy: true,
       });
       if (!spec || !meta.nativeSessionId) throw new Error("ACP task binding is incomplete");
+      this.rememberAuthMode(spec);
       if (meta.agentServerFingerprint && meta.agentServerFingerprint !== spec.fingerprint)
         throw new Error("ACP Agent configuration changed; this session cannot continue safely");
       const pendingPermissions = new Map<string, PendingPermission>();

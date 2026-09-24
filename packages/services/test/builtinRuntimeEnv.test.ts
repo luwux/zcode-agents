@@ -168,13 +168,13 @@ test("Codex BYOK injects a session model provider without writing the key into C
     model: string;
     model_providers: Record<string, { base_url: string; env_key: string; wire_api: string }>;
   };
-  assert.equal(codexConfig.model_provider, "openrouter");
+  assert.equal(codexConfig.model_provider, "codez-openrouter");
   assert.equal(codexConfig.model, "xiaomi/mimo-v2.6-flash");
   assert.deepEqual(
     {
-      base_url: codexConfig.model_providers.openrouter!.base_url,
-      env_key: codexConfig.model_providers.openrouter!.env_key,
-      wire_api: codexConfig.model_providers.openrouter!.wire_api,
+      base_url: codexConfig.model_providers["codez-openrouter"]!.base_url,
+      env_key: codexConfig.model_providers["codez-openrouter"]!.env_key,
+      wire_api: codexConfig.model_providers["codez-openrouter"]!.wire_api,
     },
     {
       base_url: "https://openrouter.ai/api/v1",
@@ -182,11 +182,11 @@ test("Codex BYOK injects a session model provider without writing the key into C
       wire_api: "responses",
     },
   );
-  assert.equal(plan.env.MODEL_PROVIDER, "openrouter");
+  assert.equal(plan.env.MODEL_PROVIDER, "codez-openrouter");
   // app-server 的登录判定读私有 CODEX_HOME 的 config.toml；只含 env_key 引用，不含密钥。
   assert.equal(plan.files.length, 1);
   assert.equal(plan.files[0]!.path, join(HOME, "codex", "config.toml"));
-  assert.match(plan.files[0]!.content, /model_provider = "openrouter"/);
+  assert.match(plan.files[0]!.content, /model_provider = "codez-openrouter"/);
   assert.match(plan.files[0]!.content, /env_key = "CODEZ_CODEX_PROVIDER_KEY"/);
   assert.match(plan.files[0]!.content, /requires_openai_auth = false/);
   assert.equal(plan.env.CODEX_HOME, join(HOME, "codex"));
@@ -205,6 +205,10 @@ test("Codex subscription has no provider override or API key", () => {
   assert.equal(plan.env.MODEL_PROVIDER, undefined);
   assert.equal(plan.env[CODEX_PROVIDER_KEY_ENV], undefined);
   assert.equal(plan.env.CODEX_HOME, join(HOME, "codex"));
+  // 审计回归：BYOK→订阅切换后必须覆盖旧的托管 config.toml，不能保留 requires_openai_auth=false 的路由。
+  assert.equal(plan.files.length, 1);
+  assert.equal(plan.files[0]!.path, join(HOME, "codex", "config.toml"));
+  assert.doesNotMatch(plan.files[0]!.content, /model_provider|requires_openai_auth/);
 });
 
 test("Pi built-in provider passes --provider/--model and only the provider key", () => {
@@ -264,4 +268,56 @@ test("BYOK without a stored key reports a problem instead of launching", () => {
     });
     assert.match(plan.problem ?? "", /API key is required/);
   }
+});
+
+test("Codex provider IDs never collide with Codex built-in providers", () => {
+  for (const providerId of ["openai", "ollama", "lmstudio", "oss"]) {
+    const plan = buildBuiltinLaunchEnv({
+      config: config({
+        runtime: "codex",
+        auth: "byok",
+        provider: { preset: "custom", baseUrl: "https://gw.example/v1", providerId },
+      }),
+      hostEnv: HOST_ENV,
+      apiKey: SECRET,
+      configHome: HOME,
+    });
+    assert.equal(plan.env.MODEL_PROVIDER, `codez-${providerId}`);
+  }
+});
+
+test("subprocess env scrubbing stays opt-in (it needs bubblewrap on Linux)", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "claude-code",
+      auth: "byok",
+      provider: { preset: "openrouter" },
+      env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assert.equal(plan.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
+  const defaults = buildBuiltinLaunchEnv({
+    config: config({ runtime: "claude-code", auth: "subscription" }),
+    hostEnv: HOST_ENV,
+    apiKey: null,
+    configHome: HOME,
+  });
+  assert.equal(defaults.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, undefined);
+});
+
+test("subscription mode also strips CLAUDE_CODE_API_BASE_URL from config env", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "claude-code",
+      auth: "subscription",
+      env: { CLAUDE_CODE_API_BASE_URL: "https://stray.invalid" },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: null,
+    configHome: HOME,
+  });
+  assert.equal(plan.env.CLAUDE_CODE_API_BASE_URL, undefined);
 });

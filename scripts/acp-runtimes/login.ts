@@ -36,6 +36,7 @@ if (!config) throw new Error(`Unknown agent config ${id}`);
 const deps = {
   resolveLaunch: resolveBuiltinLaunch,
   cwd: process.cwd(),
+  interactive: process.stdin.isTTY === true,
   onOutput: (chunk: string) => process.stdout.write(chunk),
 };
 console.log(`[login] ${config.name} (${config.runtime}, auth=${config.auth})`);

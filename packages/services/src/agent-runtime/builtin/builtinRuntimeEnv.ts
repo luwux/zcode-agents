@@ -54,6 +54,28 @@ const HOST_ENV_ALLOWLIST = new Set([
   "NODE_EXTRA_CA_CERTS",
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
+  // Agent 执行的构建/测试命令需要用户的工具链位置，与终端行为保持一致（均非凭据）。
+  "JAVA_HOME",
+  "GOPATH",
+  "GOROOT",
+  "CARGO_HOME",
+  "RUSTUP_HOME",
+  "PNPM_HOME",
+  "VIRTUAL_ENV",
+  "CONDA_PREFIX",
+  "NVM_DIR",
+  "PYENV_ROOT",
+  "SDKROOT",
+  "DEVELOPER_DIR",
+  "ANDROID_HOME",
+  "ANDROID_SDK_ROOT",
+  "PSModulePath",
+  "PROCESSOR_ARCHITECTURE",
+  "NUMBER_OF_PROCESSORS",
+  "ProgramW6432",
+  "CommonProgramFiles",
+  "OS",
+  "COMPUTERNAME",
 ]);
 const HOST_ENV_PREFIX_ALLOWLIST = ["LC_", "XDG_"];
 
@@ -68,12 +90,17 @@ const BYOK_ROUTING_PATTERNS = [
   /^AZURE_OPENAI_/,
   /^OPENROUTER_API_KEY$/,
   /^API_TIMEOUT_MS$/,
+  /^CLAUDE_CODE_API_BASE_URL$/,
 ];
 
 const LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost", "::1"];
 export const CODEX_PROVIDER_KEY_ENV = "CODEZ_CODEX_PROVIDER_KEY";
 export const PI_PROVIDER_KEY_ENV = "CODEZ_PI_PROVIDER_KEY";
-const CUSTOM_PROVIDER_ID = "codez";
+const CUSTOM_PROVIDER_ID = "custom";
+// 修复原因：provider ID 与 Codex 内置 provider（openai、ollama、lmstudio、oss…）同名时，config 覆盖会与内置
+// 定义冲突，session/new 返回 -32000。托管 ID 一律加前缀，与内置命名空间隔离。
+const CODEX_PROVIDER_PREFIX = "codez-";
+const PI_CUSTOM_PROVIDER_ID = "codez";
 
 export interface BuiltinLaunchEnvInput {
   config: AgentConfig;
@@ -158,6 +185,8 @@ function applyClaude(
   if (input.nativeBinary) env.CLAUDE_CODE_EXECUTABLE = input.nativeBinary;
   // 受管二进制版本由 lockfile 固定，禁止自行更新到别的位置。
   env.DISABLE_AUTOUPDATER = "1";
+  // 注意：CLAUDE_CODE_SUBPROCESS_ENV_SCRUB 在 Linux 需要 bubblewrap，缺失时 Claude 直接拒绝启动；
+  // 因此不默认开启，由用户按需在配置 env 中启用（见 docs/acp-runtimes.md 的密钥暴露说明）。
   if (!byok) return;
   const settings = resolveProviderSettings("claude-code", input.config.provider);
   if (!input.apiKey) plan.problem = "API key is required for this configuration";
@@ -190,16 +219,26 @@ function applyCodex(
   byok: boolean,
 ): void {
   const { env } = plan;
+  const configToml = privateHome ? join(input.configHome, "codex", "config.toml") : null;
   if (privateHome) {
     const home = join(input.configHome, "codex");
     env.CODEX_HOME = home;
     plan.nativeHome = home;
   }
   if (input.nativeBinary) env.CODEX_PATH = input.nativeBinary;
-  if (!byok) return;
+  if (!byok) {
+    // 修复原因：同一配置从 BYOK 改为订阅后，旧 config.toml（requires_openai_auth=false）会让 codex-acp 跳过
+    // 登录并继续把请求发往旧网关；私有 home 的托管文件每次启动都按当前模式重写。
+    if (configToml)
+      plan.files.push({
+        path: configToml,
+        content: `${MANAGED_TOML_HEADER}\n# Subscription sign-in: no model provider override.\n`,
+      });
+    return;
+  }
   const settings = resolveProviderSettings("codex", input.config.provider);
   if (!input.apiKey) plan.problem = "API key is required for this configuration";
-  const providerId = settings.providerId ?? CUSTOM_PROVIDER_ID;
+  const providerId = `${CODEX_PROVIDER_PREFIX}${settings.providerId ?? CUSTOM_PROVIDER_ID}`;
   const baseUrl = settings.baseUrl ?? "https://api.openai.com/v1";
   // 通过 codex-acp 的 CODEX_CONFIG 注入会话级覆盖；密钥只经 env_key 指向的变量传递，不写入 config.toml。
   const codexConfig: Record<string, unknown> = {
@@ -221,19 +260,19 @@ function applyCodex(
   // 修复原因：codex-acp 的登录判定读 app-server 自身配置（当前 provider 的 requires_openai_auth），
   // CODEX_CONFIG 只作用于会话线程，导致 BYOK 被误判为需要 ChatGPT 登录。这里在该配置私有的
   // CODEX_HOME 写入同样的非秘密路由（密钥仍只经 env_key 引用），从不触碰用户的 ~/.codex。
-  if (privateHome)
-    plan.files.push({
-      path: join(input.configHome, "codex", "config.toml"),
-      content: codexConfigToml(providerId, codexConfig),
-    });
+  if (configToml)
+    plan.files.push({ path: configToml, content: codexConfigToml(providerId, codexConfig) });
 }
+
+const MANAGED_TOML_HEADER =
+  "# Managed by CodeZ for this agent configuration. Changes are overwritten.";
 
 /** 只序列化本模块生成的固定结构；字符串用 JSON 转义（与 TOML basic string 兼容）。 */
 function codexConfigToml(providerId: string, config: Record<string, unknown>): string {
   const provider = (config.model_providers as Record<string, Record<string, unknown>>)[providerId]!;
   const value = (entry: unknown) =>
     typeof entry === "string" ? JSON.stringify(entry) : String(entry);
-  const lines = ["# Managed by CodeZ for this agent configuration. Changes are overwritten.", ""];
+  const lines = [MANAGED_TOML_HEADER, ""];
   lines.push(`model_provider = ${value(providerId)}`);
   if (typeof config.model === "string") lines.push(`model = ${value(config.model)}`);
   lines.push("", `[model_providers.${JSON.stringify(providerId)}]`);
@@ -270,7 +309,7 @@ function applyPi(
       content: `${JSON.stringify(
         {
           providers: {
-            [CUSTOM_PROVIDER_ID]: {
+            [PI_CUSTOM_PROVIDER_ID]: {
               baseUrl: settings.baseUrl,
               api: settings.api ?? "openai-completions",
               apiKey: `$${PI_PROVIDER_KEY_ENV}`,
@@ -283,7 +322,7 @@ function applyPi(
       )}\n`,
     });
     env[PI_PROVIDER_KEY_ENV] = input.apiKey ?? "";
-    plan.args.push("--provider", CUSTOM_PROVIDER_ID);
+    plan.args.push("--provider", PI_CUSTOM_PROVIDER_ID);
   } else {
     const provider = settings.providerId ?? "openrouter";
     const keyEnv = settings.piKeyEnv ?? `${provider.toUpperCase().replaceAll("-", "_")}_API_KEY`;

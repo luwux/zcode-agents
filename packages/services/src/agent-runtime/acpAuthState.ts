@@ -67,6 +67,11 @@ export class AcpAuthStateStore {
     this.set(id, { ...current, state: "authenticated" });
   }
 
+  /** 配置或 Key 变更后回到 unknown，由下一次握手/请求重新判定。 */
+  reset(id: string): void {
+    this.set(id, { state: "unknown", methods: this.get(id).methods });
+  }
+
   onDidChange(listener: (id: string, snapshot: AcpAuthSnapshot) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);

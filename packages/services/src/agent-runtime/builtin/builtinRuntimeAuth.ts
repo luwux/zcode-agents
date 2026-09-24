@@ -42,6 +42,8 @@ export function selectAuthMethod(
 export interface BuiltinLoginDependencies {
   resolveLaunch(config: AgentConfig): Promise<AcpLaunch>;
   cwd: string;
+  /** 由终端脚本调用时为 true：登录进程继承当前终端（支持仅 TUI 的登录方式）。 */
+  interactive?: boolean;
   authStates?: AcpAuthStateStore;
   /** 登录进程输出（可能含登录 URL / 设备码）；不写日志。 */
   onOutput?: (chunk: string) => void;
@@ -61,12 +63,37 @@ function assertLoginAllowed(config: AgentConfig): void {
  * 登录状态迁移：authenticating →（进程/authenticate 成功）authenticated，失败 → auth-required。
  * 终端方法按 ACP 约定以相同 argv/env 另起适配器进程，凭据只写入该配置的 CLI home。
  */
+const loginsInFlight = new Map<string, BuiltinLoginHandle>();
+
+/** 仅 TUI 的终端方法（claude-agent-acp 在远程/NO_BROWSER 环境下的 `claude-login`，args 只有 --cli）。 */
+export function isInteractiveOnlyMethod(method: AuthMethod): boolean {
+  if (!("type" in method) || method.type !== "terminal") return false;
+  const args = method.args ?? [];
+  return args.length === 0 || args.every((arg) => arg === "--cli");
+}
+
 export function startBuiltinLogin(
   config: AgentConfig,
   options: { methodId?: string; deviceAuth?: boolean },
   deps: BuiltinLoginDependencies,
 ): BuiltinLoginHandle {
   assertLoginAllowed(config);
+  // 同一配置同时只允许一个登录：重复点击复用进行中的流程，避免抢占本地回调端口。
+  const running = loginsInFlight.get(config.id);
+  if (running) return running;
+  const handle = startLoginOnce(config, options, deps);
+  loginsInFlight.set(config.id, handle);
+  void handle.completion.finally(() => {
+    if (loginsInFlight.get(config.id) === handle) loginsInFlight.delete(config.id);
+  });
+  return handle;
+}
+
+function startLoginOnce(
+  config: AgentConfig,
+  options: { methodId?: string; deviceAuth?: boolean },
+  deps: BuiltinLoginDependencies,
+): BuiltinLoginHandle {
   const states = deps.authStates ?? acpAuthStateStore;
   states.markAuthenticating(config.id);
   let announce: (value: { message?: string }) => void = () => {};
@@ -167,6 +194,16 @@ export async function logoutBuiltinRuntime(
 
 const URL_PATTERN = /https?:\/\/\S+/;
 
+function withLoginTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("sign-in timed out")), LOGIN_TIMEOUT_MS);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function runLoginProcess(
   command: string,
   args: readonly string[],
@@ -174,6 +211,17 @@ async function runLoginProcess(
   deps: BuiltinLoginDependencies,
   announce: (value: { message?: string }) => void,
 ): Promise<void> {
+  if (deps.interactive) {
+    // 终端脚本：直接继承 TTY，交给 CLI 自己的登录界面。
+    const child = spawn(command, [...args], { cwd: deps.cwd, env: env ?? {}, stdio: "inherit" });
+    announce({});
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    if (code !== 0) throw new Error(`login process exited with ${code}`);
+    return;
+  }
   const child = spawn(command, [...args], {
     cwd: deps.cwd,
     env: env ?? {},

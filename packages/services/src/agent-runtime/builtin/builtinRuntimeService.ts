@@ -8,7 +8,11 @@ import {
   type AgentConfig,
   type AgentConfigInput,
 } from "#src/agent-runtime/builtin/agentConfigRegistry.js";
+import { rm } from "node:fs/promises";
+import { saveAcpModels } from "#src/agent-runtime/acpProviderModels.js";
 import {
+  builtinConfigFingerprint,
+  builtinConfigHome,
   resolveBuiltinLaunch,
   saveBuiltinConfigApiKey,
 } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
@@ -35,10 +39,25 @@ export async function saveBuiltinRuntimeConfig(
   return saved;
 }
 
-/** 删除落盘配置与其 Key；默认 ID 随后回到内置默认值，不能继承旧 Key。 */
-export async function deleteBuiltinRuntimeConfig(id: string): Promise<void> {
+/**
+ * 删除落盘配置、Key 与私有 home。修复原因：私有 home 保存订阅凭据（Codex auth.json、Claude
+ * .credentials.json；macOS Keychain 条目按 home 路径哈希命名），同 ID 重建会继承旧登录。
+ * 订阅配置先尽力登出（清 Keychain），再删除 home；cli-login 不使用私有 home，不触碰全局登录。
+ */
+export async function deleteBuiltinRuntimeConfig(
+  id: string,
+  workspacePath?: string,
+): Promise<void> {
+  const config = await findAgentConfig(id);
+  if (config?.auth === "subscription")
+    await logoutBuiltinRuntime(config, {
+      resolveLaunch: (current) => resolveBuiltinLaunch(current),
+      cwd: workspacePath ?? builtinConfigHome(id),
+    }).catch(() => {});
   await deleteAgentConfig(id);
   await saveBuiltinConfigApiKey(id, null);
+  await rm(builtinConfigHome(id), { recursive: true, force: true });
+  acpAuthStateStore.reset(id);
 }
 
 async function requireConfig(id: string): Promise<AgentConfig> {

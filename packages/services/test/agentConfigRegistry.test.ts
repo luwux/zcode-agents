@@ -141,3 +141,45 @@ test("agent_servers can no longer claim built-in runtime IDs", async () => {
     assert.equal(registry.issues[0]?.id, "codex");
   });
 });
+
+test("non-secret *_TOKENS variables are allowed; key/token names are refused", () => {
+  const base = { name: "X", runtime: "claude-code", auth: "byok" };
+  for (const name of ["MAX_THINKING_TOKENS", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "DISABLE_TELEMETRY"])
+    assert.equal(typeof parseAgentConfig("x", { ...base, env: { [name]: "1" } }), "object", name);
+  for (const name of ["OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MY_SECRET", "DB_PASSWORD"])
+    assert.match(
+      String(parseAgentConfig("x", { ...base, env: { [name]: "v" } })),
+      /looks secret/,
+      name,
+    );
+});
+
+test("legacy ACP IDs stay reserved for session restore", () => {
+  for (const id of ["qoder-acp", "cline-acp", "codebuddy-acp", "workbuddy-acp", "zcode-cli"])
+    assert.match(
+      String(parseAgentConfig(id, { name: "X", runtime: "codex", auth: "subscription" })),
+      /reserved/,
+    );
+});
+
+test("an invalid override of a default ID disables that ID instead of reviving the default", async () => {
+  await withDataDir(async (dir) => {
+    await mkdir(join(dir, ".codez", "v2"), { recursive: true });
+    await writeFile(
+      getAgentConfigsPath(),
+      JSON.stringify({
+        agents: { "claude-code": { name: "Mine", runtime: "claude-code", auth: "nope" } },
+      }),
+    );
+    const snapshot = await readAgentConfigs();
+    assert.ok(!snapshot.configs.some((config) => config.id === "claude-code"));
+    assert.deepEqual(
+      snapshot.issues.map((issue) => issue.id),
+      ["claude-code"],
+    );
+    assert.equal(await resolveAcpRuntimeSpec("claude-code"), null);
+    // 不可读 / 结构错误的文件：全部失败关闭，不回退默认订阅配置。
+    await writeFile(getAgentConfigsPath(), "{not json");
+    assert.deepEqual((await readAgentConfigs()).configs, []);
+  });
+});

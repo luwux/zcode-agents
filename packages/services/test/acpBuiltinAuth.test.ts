@@ -8,6 +8,7 @@ import { AcpAuthStateStore } from "../src/agent-runtime/acpAuthState.js";
 import { AcpStartupGate } from "../src/agent-runtime/acpStartupGate.js";
 import { saveAgentServerConfig } from "../src/agent-runtime/agentServersRegistry.js";
 import {
+  isInteractiveOnlyMethod,
   logoutBuiltinRuntime,
   selectAuthMethod,
   startBuiltinLogin,
@@ -233,4 +234,80 @@ test("login and logout are refused where they would touch the wrong credentials"
   );
   assert.equal((await handle.completion).state, "auth-required");
   assert.match(failed.get("f").message ?? "", /Managed Codex binary is unavailable/);
+});
+
+test("the TUI-only Claude login is detected and refused without a terminal", () => {
+  assert.equal(
+    isInteractiveOnlyMethod({
+      id: "claude-login",
+      name: "Log in",
+      type: "terminal",
+      args: ["--cli"],
+    }),
+    true,
+  );
+  assert.equal(
+    isInteractiveOnlyMethod({
+      id: "claude-ai-login",
+      name: "Subscription",
+      type: "terminal",
+      args: ["--cli", "auth", "login", "--claudeai"],
+    }),
+    false,
+  );
+  assert.equal(isInteractiveOnlyMethod({ id: "chat-gpt", name: "ChatGPT" }), false);
+});
+
+test("concurrent logins for one config share a single flow", () => {
+  const states = new AcpAuthStateStore();
+  let launches = 0;
+  const deps = {
+    resolveLaunch: async () => {
+      launches += 1;
+      throw new Error("stop here");
+    },
+    cwd: "/",
+    authStates: states,
+  };
+  const config: AgentConfig = { id: "dup", name: "Dup", runtime: "codex", auth: "subscription" };
+  const first = startBuiltinLogin(config, {}, deps);
+  const second = startBuiltinLogin(config, {}, deps);
+  assert.equal(first, second);
+  return first.completion.then(() => assert.equal(launches, 1));
+});
+
+test("a rejected BYOK key is reported as a key problem, not a sign-in prompt", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "codez-acp-byok-auth-"));
+  setDataBaseDir(dir);
+  const agentFile = join(dir, "agent.mjs");
+  const marker = join(dir, "never-logged-in");
+  const repo = new TaskIndexRepo(join(dir, "tasks.sqlite"));
+  const states = new AcpAuthStateStore();
+  const launch = async () => ({
+    executable: process.execPath,
+    args: [agentFile, marker],
+    env: process.env,
+  });
+  const coordinator = new AcpRuntimeCoordinator(repo, {}, launch, () => false, states);
+  try {
+    await writeFile(agentFile, AGENT);
+    const { saveAgentConfig } = await import("../src/agent-runtime/builtin/agentConfigRegistry.js");
+    await saveAgentConfig({
+      id: "claude-byok",
+      name: "Claude BYOK",
+      runtime: "claude-code",
+      auth: "byok",
+      provider: { preset: "openrouter" },
+    });
+    await assert.rejects(
+      coordinator.create({ workspacePath: dir, commandId: "b1", runtimeId: "claude-byok" }),
+      /API key rejected by the provider: Authentication required/,
+    );
+    assert.equal(states.get("claude-byok").state, "auth-required");
+    assert.match(states.get("claude-byok").message ?? "", /API key rejected/);
+  } finally {
+    await coordinator.closeAll();
+    setDataBaseDir(null);
+    await rm(dir, { recursive: true, force: true });
+  }
 });

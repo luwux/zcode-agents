@@ -83,6 +83,26 @@ Pick the provider in the composer model picker and send a prompt. To check expir
 `login.ts <id> --logout`, send another prompt: the turn ends with "Sign-in required" and the card flips
 back; nothing falls back to BYOK or another runtime.
 
+## Security notes and known limits
+
+- **BYOK keys are visible to commands the agent runs.** The key is injected into the agent's
+  environment; Claude's Bash and Pi's bash inherit it, so a prompt-injected `env` could read it. Codex
+  excludes `*KEY*` variables from its shell by default. Claude can scrub credentials from subprocesses with
+  `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` (set it in the config's `env`); on Linux this needs `bubblewrap`,
+  otherwise Claude refuses to start, so it is not on by default.
+- **Remote hosts / SSH:** when the Host environment has `SSH_CONNECTION`, `SSH_TTY` or `NO_BROWSER`,
+  claude-agent-acp only offers its terminal-UI login. The app then reports that sign-in needs an
+  interactive terminal; run `scripts/acp-runtimes/login.ts <id>` in a terminal on that host.
+- **Deleting a config** signs out subscription configs (removing the per-config Keychain entry on macOS),
+  deletes its API key and removes `~/.codez/acp-homes/<id>`, so a re-created config never inherits a login.
+- **Proxies:** when `HTTP(S)_PROXY` is set, Node-based adapters get `NODE_USE_ENV_PROXY=1`; the native
+  `claude` and `codex` binaries read the proxy variables themselves.
+- **Electron:** Claude and Codex adapters are started through a tiny `-e` bootstrap that removes
+  `ELECTRON_RUN_AS_NODE` before loading the adapter, so commands the agent runs (`electron .`, `code`)
+  behave normally. Pi still needs the variable to start `pi`, so commands run by Pi inherit it.
+- **Codex modes:** the default "agent" mode sends approvals to Codex's Guardian reviewer model (billed like
+  any request); "read-only" ("Ask for approval") asks the user; "agent-full-access" never asks.
+
 ## Tests
 
 | Suite                                            | Command                                                                                                     | Network                                             |

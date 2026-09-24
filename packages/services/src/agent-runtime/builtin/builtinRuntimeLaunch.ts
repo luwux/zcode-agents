@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, writeFile } from "node:fs/promises";
-import { constants } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { atomicWritePrivateTextFile } from "@zcode/shared/node";
 import { createCredentialService } from "#src/credential/credentialService.js";
 import type { ICredentialService } from "#src/credential/credential.js";
 import { getZCodeDataRootDir } from "#src/paths.js";
@@ -9,12 +9,12 @@ import {
   secretCredentialKey,
   type AgentConfig,
 } from "#src/agent-runtime/builtin/agentConfigRegistry.js";
+import { BUILTIN_RUNTIME_DEFINITIONS } from "#src/agent-runtime/builtin/builtinRuntimeCatalog.js";
 import {
-  BUILTIN_RUNTIME_DEFINITIONS,
-  claudeNativeBinaryCandidates,
-  codexNativeBinaryCandidate,
-} from "#src/agent-runtime/builtin/builtinRuntimeCatalog.js";
-import { ensureBuiltinRuntimeInstalled } from "#src/agent-runtime/builtin/builtinRuntimeInstaller.js";
+  discardBrokenInstall,
+  ensureBuiltinRuntimeInstalled,
+  findNativeBinary,
+} from "#src/agent-runtime/builtin/builtinRuntimeInstaller.js";
 import { buildBuiltinLaunchEnv } from "#src/agent-runtime/builtin/builtinRuntimeEnv.js";
 import { nodeModeEnv } from "#src/agent-runtime/builtin/builtinProcess.js";
 
@@ -60,47 +60,8 @@ export async function saveBuiltinConfigApiKey(
   else await credentialService().save(secretCredentialKey(configId), apiKey);
 }
 
-function isMusl(): boolean {
-  const report = process.report?.getReport() as
-    | { header?: { glibcVersionRuntime?: string } }
-    | undefined;
-  return !report?.header?.glibcVersionRuntime;
-}
-
-async function firstReadable(dir: string, candidates: readonly string[]): Promise<string> {
-  for (const candidate of candidates) {
-    const path = join(dir, candidate);
-    try {
-      await access(path, constants.X_OK);
-      return path;
-    } catch {
-      // 继续下一个候选。
-    }
-  }
-  throw new Error(`Managed native binary is missing under ${dir}`);
-}
-
-async function resolveNativeBinary(
-  config: AgentConfig,
-  installDir: string,
-): Promise<string | undefined> {
-  if (config.runtime === "claude-code")
-    return firstReadable(
-      installDir,
-      claudeNativeBinaryCandidates(
-        process.platform,
-        process.arch,
-        process.platform === "linux" && isMusl(),
-      ),
-    );
-  if (config.runtime === "codex") {
-    const candidate = codexNativeBinaryCandidate(process.platform, process.arch);
-    if (!candidate)
-      throw new Error(`Codex is not available for ${process.platform}-${process.arch}`);
-    return firstReadable(installDir, [candidate]);
-  }
-  return undefined;
-}
+const STRIP_ELECTRON_NODE_MODE =
+  'delete process.env.ELECTRON_RUN_AS_NODE; const { pathToFileURL } = await import("node:url"); await import(pathToFileURL(process.argv[1]).href);';
 
 export interface BuiltinLaunchOptions {
   hostEnv?: NodeJS.ProcessEnv;
@@ -114,10 +75,22 @@ export async function resolveBuiltinLaunch(
 ): Promise<AcpLaunch> {
   const definition = BUILTIN_RUNTIME_DEFINITIONS[config.runtime];
   const hostEnv = options.hostEnv ?? process.env;
-  const installDir = await ensureBuiltinRuntimeInstalled(definition, {
-    root: builtinRuntimesRoot(hostEnv),
-    env: hostEnv,
-  });
+  const root = builtinRuntimesRoot(hostEnv);
+  let installDir = await ensureBuiltinRuntimeInstalled(definition, { root, env: hostEnv });
+  let nativeBinary = await findNativeBinary(installDir, definition);
+  if (
+    !nativeBinary &&
+    definition.nativeBinaryCandidates(process.platform, process.arch, false).length
+  ) {
+    // 修复原因：旧版本安装器可能发布了缺原生二进制的目录；丢弃后重装一次，而不是永久失败。
+    await discardBrokenInstall(root, definition);
+    installDir = await ensureBuiltinRuntimeInstalled(definition, { root, env: hostEnv });
+    nativeBinary = await findNativeBinary(installDir, definition);
+    if (!nativeBinary)
+      throw new Error(
+        `${definition.name} native binary is missing for ${process.platform}-${process.arch}`,
+      );
+  }
   const apiKey =
     options.apiKey !== undefined
       ? options.apiKey
@@ -129,17 +102,23 @@ export async function resolveBuiltinLaunch(
     hostEnv,
     apiKey,
     configHome: builtinConfigHome(config.id),
-    nativeBinary: await resolveNativeBinary(config, installDir),
+    ...(nativeBinary ? { nativeBinary } : {}),
   });
   if (plan.problem) throw new Error(`${config.name}: ${plan.problem}`);
   if (plan.nativeHome !== "global") await mkdir(plan.nativeHome, { recursive: true, mode: 0o700 });
   for (const file of plan.files) {
-    await mkdir(dirname(file.path), { recursive: true, mode: 0o700 });
-    await writeFile(file.path, file.content, { mode: 0o600 });
+    // 原子替换且内容未变时跳过：并发启动同一配置时不会读到被截断的 config.toml/models.json。
+    const current = await readFile(file.path, "utf8").catch(() => null);
+    if (current !== file.content) await atomicWritePrivateTextFile(file.path, file.content);
   }
-  return {
-    executable: process.execPath,
-    args: [join(installDir, definition.adapterEntry), ...plan.args],
-    env: nodeModeEnv(plan.env),
-  };
+  const entry = join(installDir, definition.adapterEntry);
+  if (process.versions.electron && !definition.childrenNeedNodeMode)
+    // 修复原因：ELECTRON_RUN_AS_NODE 会被 Agent 执行的命令继承（electron .、code 等变成纯 Node）。
+    // 适配器只需在自身进程以 Node 模式启动；加载前删除该变量，argv[1] 仍是适配器入口。
+    return {
+      executable: process.execPath,
+      args: ["--input-type=module", "-e", STRIP_ELECTRON_NODE_MODE, entry, ...plan.args],
+      env: nodeModeEnv(plan.env),
+    };
+  return { executable: process.execPath, args: [entry, ...plan.args], env: nodeModeEnv(plan.env) };
 }
