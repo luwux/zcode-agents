@@ -140,3 +140,63 @@ jobs:
           name: live-openrouter
           path: artifacts
           if-no-files-found: ignore
+
+  desktop-cdp:
+    name: Desktop CDP e2e (real Electron, clicks and typing)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Allow unprivileged user namespaces (network isolation, Codex sandbox)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/codez-acp-runtimes
+          key: acp-runtimes-${{ runner.os }}-${{ hashFiles('packages/services/src/agent-runtime/builtin/manifests/*.json', 'packages/services/src/agent-runtime/builtin/builtinRuntimeCatalog.ts', 'packages/services/src/agent-runtime/builtin/builtinRuntimeInstaller.ts', 'packages/services/src/agent-runtime/builtin/builtinProcess.ts') }}
+      - name: CDP e2e against the replay proxy (loopback-only)
+        run: node scripts/acp-cdp/run-cdp-e2e.mjs --runtimes-cache ~/.cache/codez-acp-runtimes --artifacts artifacts/cdp-replay
+      - name: OpenRouter usage before
+        if: github.event_name != 'pull_request'
+        id: before
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
+      - name: CDP e2e against OpenRouter (MiMo v2.6 Flash)
+        if: github.event_name != 'pull_request'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: node scripts/acp-cdp/run-cdp-e2e.mjs --mode live --no-build --no-install --runtimes-cache ~/.cache/codez-acp-runtimes --artifacts artifacts/cdp-live
+      - name: OpenRouter usage after
+        if: always() && github.event_name != 'pull_request'
+        id: after
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Cost summary
+        if: always() && github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ steps.before.outputs.usage }}
+          AFTER: ${{ steps.after.outputs.usage }}
+        run: |
+          node -e '
+            const b = JSON.parse(process.env.BEFORE || "{}").usage, a = JSON.parse(process.env.AFTER || "{}").usage;
+            const line = (typeof a === "number" && typeof b === "number")
+              ? `OpenRouter cost for the CDP live cases: $${(a - b).toFixed(6)} (key usage ${b} -> ${a})`
+              : "OpenRouter cost unavailable (no key or usage endpoint failed)";
+            console.log(line);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-cdp
+          path: artifacts
+          if-no-files-found: ignore
