@@ -250,5 +250,17 @@
     "license": "MIT",
     "scope": "Vendored React/Next.js guidance and local adaptations; local README preserves Shu Ding / Vercel attribution.",
     "reviewRequired": "Pinned upstream README and skill declare MIT, but a complete original copyright/license notice has not been obtained."
+  },
+  {
+    "id": "OpenAI Codex fallback base instructions",
+    "referenceRevision": "b412ff32c417f855c2b2d1581b77058eed87c84b",
+    "source": "https://raw.githubusercontent.com/openai/codex/b412ff32c417f855c2b2d1581b77058eed87c84b/LICENSE",
+    "file": "third-party/upstream/d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc.txt",
+    "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+    "importRevision": "b412ff32c417f855c2b2d1581b77058eed87c84b",
+    "provenance": "codex-rs/models-manager/prompt.md at tag rust-v0.156.1 (the instructions Codex uses for models missing from its catalog), copied verbatim into the `text` field. Upstream NOTICE: OpenAI Codex, Copyright 2025 OpenAI.",
+    "roots": ["packages/services/src/agent-runtime/builtin/manifests/codex-base-instructions.json"],
+    "scope": "Only the prompt text in the `text` field; the surrounding JSON metadata is CodeZ's.",
+    "license": "Apache-2.0"
   }
 ]

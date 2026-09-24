@@ -8,7 +8,8 @@
 // Speaks Anthropic Messages (`POST */v1/messages`, SSE or JSON) and OpenAI Responses
 // (`POST */responses`, SSE). Every request that carries tools advances the fixture by one
 // recorded model response, regardless of the prompt; side requests without tools (titles,
-// summaries) get a short fixed answer and do not advance. Binds to 127.0.0.1 only.
+// summaries) or with a structured-output format (Codex ACP titles) get a short fixed answer and
+// do not advance. Binds to 127.0.0.1 only.
 
 import { appendFileSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -16,6 +17,7 @@ import { parseArgs } from "node:util";
 import {
   anthropicIsContinuation,
   hasTools,
+  isMainResponsesRequest,
   ReplayCursor,
   responsesIsContinuation,
   substituteWorkspace,
@@ -167,6 +169,14 @@ async function anthropicStream(res, model, reply) {
   res.end();
 }
 
+/** 记录请求中与模型/推理相关的参数（不含消息内容），供 e2e 断言所选模型与推理档位确实发往 Provider。 */
+function requestParams(body) {
+  const params = { model: body.model };
+  for (const key of ["thinking", "output_config", "reasoning", "reasoning_effort"])
+    if (body[key] !== undefined) params[key] = body[key];
+  return params;
+}
+
 async function handleAnthropic(req, res, body) {
   const main = hasTools(body);
   const reply = main
@@ -181,6 +191,7 @@ async function handleAnthropic(req, res, body) {
   log({
     api: "anthropic",
     path: req.url,
+    params: requestParams(body),
     main,
     lastMessages,
     turn: reply.turn,
@@ -235,13 +246,14 @@ function responsesItems(events) {
 }
 
 async function handleResponses(req, res, body) {
-  const main = hasTools(body);
+  const main = isMainResponsesRequest(body);
   const reply = main
     ? cursor.advance(responsesIsContinuation(body))
     : { events: [{ kind: "text", text: "Replay", delay_ms: 0 }], stop: "end_turn", side: true };
   log({
     api: "responses",
     path: req.url,
+    params: requestParams(body),
     main,
     turn: reply.turn,
     segment: reply.segment,

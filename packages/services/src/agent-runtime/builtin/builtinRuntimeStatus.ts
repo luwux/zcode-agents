@@ -10,7 +10,15 @@ import {
   builtinRuntimesRoot,
   loadBuiltinConfigApiKey,
 } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
-import type { AgentProviderSettings } from "#src/agent-runtime/builtin/builtinProviderPresets.js";
+import type {
+  AgentModelSettings,
+  AgentProviderSettings,
+} from "#src/agent-runtime/builtin/builtinProviderPresets.js";
+import { configuredModels } from "#src/agent-runtime/builtin/builtinModels.js";
+import {
+  configuredModelOptions,
+  type BuiltinModelOption,
+} from "#src/agent-runtime/builtin/builtinModelOptions.js";
 
 export interface BuiltinRuntimeStatus {
   id: string;
@@ -22,6 +30,8 @@ export interface BuiltinRuntimeStatus {
   installHint?: string;
   reason?: string;
   fingerprint: string;
+  /** Host 内部：BYOK 声明模型推出的选择器条目；listAgentRuntimes 据此生成 models，不直接回传。 */
+  configuredOptions: BuiltinModelOption[];
   builtin: {
     runtime: AgentConfig["runtime"];
     version: string;
@@ -31,6 +41,10 @@ export interface BuiltinRuntimeStatus {
     authMethods: AcpAuthSnapshot["methods"];
     hasApiKey: boolean;
     provider?: AgentProviderSettings;
+    /** BYOK 声明的模型（旧版单模型 `model` 视为一项）；为空时模型来自“同步 Agent 模型”。 */
+    models: AgentModelSettings[];
+    /** false 时该配置不出现在输入框模型选择器中。 */
+    enabled: boolean;
     isDefault: boolean;
   };
 }
@@ -75,6 +89,7 @@ export async function listBuiltinRuntimeStatuses(): Promise<{
             }),
         ...(reason ? { reason } : {}),
         fingerprint: builtinConfigFingerprint(config),
+        configuredOptions: configuredModelOptions(config),
         builtin: {
           runtime: config.runtime,
           version: definition.version,
@@ -85,6 +100,8 @@ export async function listBuiltinRuntimeStatuses(): Promise<{
           authMethods: auth.methods,
           hasApiKey,
           ...(config.provider ? { provider: config.provider } : {}),
+          models: config.auth === "byok" ? [...configuredModels(config.provider)] : [],
+          enabled: config.enabled !== false,
           isDefault: config.builtinDefault === true,
         },
       };

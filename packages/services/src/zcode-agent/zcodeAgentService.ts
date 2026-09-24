@@ -324,8 +324,12 @@ import {
   deleteBuiltinRuntimeConfig,
   loginBuiltinRuntime,
   logoutBuiltinRuntimeConfig,
+  onBuiltinRuntimeAuthChange,
   saveBuiltinRuntimeConfig,
+  type BuiltinRuntimeAuthChange,
 } from "#src/agent-runtime/builtin/builtinRuntimeService.js";
+import { describeBuiltinRuntimeCatalog } from "#src/agent-runtime/builtin/builtinRuntimeCatalogView.js";
+import { projectBuiltinModels } from "#src/agent-runtime/builtin/builtinModelOptions.js";
 import { acpSpecIdentity, resolveAcpRuntimeSpec } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import { readAcpModelCatalog, saveAcpModels } from "#src/agent-runtime/acpProviderModels.js";
 import {
@@ -1161,6 +1165,11 @@ export function createZCodeAgentService(
   const localTtftFactsEmitter = new Emitter<{ workspaceKey: string; facts: LocalTtftFacts }>();
   const conversationTelemetryFactEmitters = new Map<string, Emitter<ConversationTelemetryFact>>();
   const cuaPermissionObservationEmitter = new Emitter<ZCodeAgentCuaPermissionObservation>();
+  // 内置 Runtime 认证状态的唯一所有者是 AcpAuthStateStore；这里只转发“某配置状态已变”的触发信号。
+  const agentRuntimeAuthChangeEmitter = new Emitter<BuiltinRuntimeAuthChange>();
+  const stopAgentRuntimeAuthChanges = onBuiltinRuntimeAuthChange((change) =>
+    agentRuntimeAuthChangeEmitter.fire(change),
+  );
   // sessions-index 帧 fan-out：与 conversation 同一 conversationFrame 通知，按 topic 前缀分流到此 emitter。
   const sessionsIndexFrameEmitters = new Map<string, Emitter<SessionsIndexTopicWireCandidate>>();
   // workspace-config 帧 fan-out：配置目录活性（task-index syncer 消费），同一通知按前缀分流。
@@ -3242,6 +3251,8 @@ export function createZCodeAgentService(
     conversationTelemetryFactEmitters.clear();
     localTtftFactsEmitter.dispose();
     cuaPermissionObservationEmitter.dispose();
+    stopAgentRuntimeAuthChanges();
+    agentRuntimeAuthChangeEmitter.dispose();
     for (const emitter of workspaceConfigFrameEmitters.values()) {
       emitter.dispose();
     }
@@ -3368,7 +3379,9 @@ export function createZCodeAgentService(
           command: "built-in",
           configPath: registry.path,
         },
-        ...builtins.statuses.map(({ fingerprint: _fingerprint, ...status }) => status),
+        ...builtins.statuses.map(
+          ({ fingerprint: _fingerprint, configuredOptions: _options, ...status }) => status,
+        ),
         ...builtins.issues.map((issue) => ({
           id: issue.id,
           name: issue.id,
@@ -3395,16 +3408,24 @@ export function createZCodeAgentService(
           configPath: registry.path,
         })),
       ];
+      const configuredOptions = new Map(
+        builtins.statuses.map((status) => [status.id, status.configuredOptions]),
+      );
       return Promise.all(
         statuses.map(async (status) => {
           const spec = status.id === "zcode-cli" ? null : await resolveAcpRuntimeSpec(status.id);
           if (!spec) return status;
+          // 停用的内置配置不在输入框模型选择器中提供（设置页仍可见、可重新启用）；
+          // BYOK 声明的模型由 Runtime 原生列出，选项 ID 与推理档位直接由配置推出，不依赖同步缓存。
+          const enabled = "builtin" in status && status.builtin ? status.builtin.enabled : true;
           try {
-            const catalog = await readAcpModelCatalog(status.id, acpSpecIdentity(spec));
             return {
               ...status,
-              models: [...catalog.models],
-              availableModels: [...catalog.availableModels],
+              ...(await projectBuiltinModels({
+                enabled,
+                configured: configuredOptions.get(status.id) ?? [],
+                catalog: () => readAcpModelCatalog(status.id, acpSpecIdentity(spec)),
+              })),
             };
           } catch (error) {
             return {
@@ -3434,11 +3455,17 @@ export function createZCodeAgentService(
       await deleteBuiltinRuntimeConfig(id);
       return this.listAgentRuntimes();
     },
+    async listBuiltinRuntimeCatalog() {
+      return describeBuiltinRuntimeCatalog();
+    },
     async loginAgentRuntime(params) {
       return loginBuiltinRuntime(params);
     },
     async logoutAgentRuntime(params) {
       return logoutBuiltinRuntimeConfig(params);
+    },
+    onDynamicAgentRuntimeAuthChange() {
+      return agentRuntimeAuthChangeEmitter.event;
     },
     async saveAgentServerModels(input) {
       const spec = await resolveAcpRuntimeSpec(input.runtimeId);

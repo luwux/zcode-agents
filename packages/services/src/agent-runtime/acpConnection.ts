@@ -104,7 +104,8 @@ export interface AcpModelOption {
 
 const ACP_MODEL_PREFIX = "acp:model:";
 
-function encodeModelOption(configId: string, value: string): string {
+/** ACP 模型选项在工作台中的稳定 ID：`acp:model:<configId>:<value>`。 */
+export function encodeModelOption(configId: string, value: string): string {
   return `${ACP_MODEL_PREFIX}${encodeURIComponent(configId)}:${encodeURIComponent(value)}`;
 }
 

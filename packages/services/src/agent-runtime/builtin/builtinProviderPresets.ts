@@ -1,10 +1,37 @@
 import type { BuiltinAcpRuntime } from "#src/agent-runtime/builtin/builtinRuntimeCatalog.js";
 
+/** 各 Runtime 都能表达的推理档位（Codex effort / Pi thinking level / Claude effort 能力）。 */
+export const REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
+/** 未单独设置时提供的档位；OpenRouter 等网关对不推理的模型会忽略 effort。 */
+export const DEFAULT_REASONING_LEVELS: readonly ReasoningLevel[] = ["low", "medium", "high"];
+
+/** BYOK 配置中用户声明的模型；Runtime 会原生列出这些模型（Pi models.json、Codex 模型目录、Claude 模型槽）。 */
+export interface AgentModelSettings {
+  /** 发送给 Provider 的模型 ID，如 `deepseek/deepseek-v4.1-flash`。 */
+  id: string;
+  name?: string;
+  /** false 时不在输入框模型选择器中提供；缺省为 true。 */
+  enabled?: boolean;
+  /** 是否支持推理/思考；缺省为 true。 */
+  reasoning?: boolean;
+  /** 提供的推理档位；缺省为 DEFAULT_REASONING_LEVELS。 */
+  reasoningLevels?: ReasoningLevel[];
+  contextWindow?: number;
+  maxTokens?: number;
+  /** 是否接受图片输入。 */
+  vision?: boolean;
+  /** 仅 Claude：占用的模型槽（0-4），保存时分配并保持稳定，避免删改其他模型时别名改指。 */
+  slot?: number;
+}
+
 /** 非秘密的 Provider 路由设置；密钥只以 `apiKey` 秘密单独保存。 */
 export interface AgentProviderSettings {
   preset?: string;
   baseUrl?: string;
+  /** 旧版单模型字段；`models` 缺省时视为只含该模型的列表。 */
   model?: string;
+  models?: AgentModelSettings[];
   /** Claude 的 haiku/small-fast 模型；缺省与 model 相同。 */
   smallModel?: string;
   /** Codex `model_providers` 的 ID / Pi 内置 provider 名。 */

@@ -75,6 +75,7 @@ export function ProviderCardHeader({
   onNameCompositionStart,
   onStartEditName,
   onDelete,
+  deleteLabel,
   actionsVisible = true,
   providerToggle,
 }: {
@@ -91,6 +92,8 @@ export function ProviderCardHeader({
   onNameCompositionStart?: () => void;
   onStartEditName: () => void;
   onDelete?: () => void;
+  /** 删除项文案（内置 ACP 覆盖默认配置时为“恢复默认”）。 */
+  deleteLabel?: string;
   actionsVisible?: boolean;
   providerToggle?: ReactNode;
 }) {
@@ -166,7 +169,7 @@ export function ProviderCardHeader({
               {onDelete ? (
                 <DropdownMenuItem variant="destructive" onSelect={onDelete}>
                   <Trash2 className="size-3.5" />
-                  {intl.formatMessage({ id: "common.delete" })}
+                  {deleteLabel ?? intl.formatMessage({ id: "common.delete" })}
                 </DropdownMenuItem>
               ) : null}
             </DropdownMenuContent>
@@ -279,6 +282,9 @@ export function ProviderApiKeySection({
   apiKeyValue,
   apiKeyVisible,
   readOnly,
+  placeholder,
+  inputTestId,
+  labelAction,
   presetApiKeyUrl,
   onOpenPresetApiKey,
   onApiKeyChange,
@@ -291,6 +297,10 @@ export function ProviderApiKeySection({
   apiKeyValue: string;
   apiKeyVisible: boolean;
   readOnly?: boolean;
+  placeholder?: string;
+  inputTestId?: string;
+  /** 标签行右侧的附加操作（如清除已保存的 Key）。 */
+  labelAction?: ReactNode;
   presetApiKeyUrl?: string;
   onOpenPresetApiKey?: () => void;
   onApiKeyChange: (value: string) => void;
@@ -311,11 +321,14 @@ export function ProviderApiKeySection({
         {presetApiKeyUrl && onOpenPresetApiKey ? (
           <PresetProviderApiKeyBanner onOpenApiKey={onOpenPresetApiKey} />
         ) : null}
+        {labelAction}
       </div>
       <ApiKeyInput
         value={apiKeyValue}
         visible={apiKeyVisible}
         readOnly={readOnly}
+        placeholder={placeholder}
+        {...(inputTestId ? { testId: inputTestId } : {})}
         onChange={onApiKeyChange}
         onBlur={onApiKeyBlur}
         onKeyDown={onApiKeyKeyDown}

@@ -36,34 +36,110 @@ export async function dismissOnboarding({ page, click }) {
   return { clicked };
 }
 
+const until = async (predicate, timeoutMs, label) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await predicate())) {
+    if (Date.now() > deadline) throw new Error(`timed out: ${label}`);
+    await sleep(200);
+  }
+};
+
 /**
- * Composer model picker → "Manage models" → Settings › ACP › config → "同步 Agent 模型" → switch the
- * wanted model on → "Back to workspace". Live mode never enables a different (maybe pricier) model.
+ * Composer model picker → "Manage models" → Settings › ACP › config (the built-in runtime card) →
+ * optionally "Add model" (dialog: type the model ID, Save) and the API key (type it, Enter) through the
+ * real UI → make sure the model is switched on → "Back to workspace". Configs without declared models
+ * fall back to "Sync models" + switching the wanted advertised model on. Live mode never enables a
+ * different (maybe pricier) model.
  */
-export async function enableModelInSettings(
-  { page, click },
-  { configName, wanted, allowDefault, strict, timeoutMs },
+export async function configureRuntimeInSettings(
+  { page, click, logAction, screenshot },
+  { configId, configName, addModel, apiKey, wanted, allowDefault, strict, timeoutMs },
 ) {
   await click(page.getByTestId("chat-model-select-trigger"), "model picker");
   await click(page.getByRole("menuitem", { name: "Manage models", exact: true }), "Manage models");
-  const nav = page.getByRole("button", { name: configName, exact: true });
+  // 导航项的可访问名称还包含状态圆点的标签，按导航项 test id 定位。
+  const nav = page.getByTestId(`model-provider-nav-item-acp:${configId}`);
   await nav.waitFor({ timeout: 30_000 });
   await click(nav, `ACP provider ${configName}`);
-  const section = page.locator('section[aria-label="ACP 供应商"]');
-  await section.waitFor({ timeout: 15_000 });
-  const syncButton = section.getByRole("button", { name: "同步 Agent 模型", exact: true });
-  await syncButton.waitFor({ timeout: 15_000 });
-  await click(syncButton, "同步 Agent 模型 (sync agent models)");
-  const errors = section.locator('[role="alert"].text-destructive');
+  const card = page.getByTestId("acp-builtin-card");
+  await card.waitFor({ timeout: 15_000 });
+  const observed = {};
+  if (addModel) {
+    await click(card.getByTestId("model-provider-add-model-button"), "Add model");
+    const idInput = page.getByTestId("acp-builtin-model-id");
+    await idInput.waitFor({ timeout: 10_000 });
+    await click(idInput, "model ID");
+    logAction({ action: "type", target: "model ID", text: addModel });
+    await page.keyboard.type(addModel, { delay: 5 });
+    await screenshot?.("settings-add-model-dialog");
+    await click(
+      page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }),
+      "Save",
+    );
+    await card.getByTestId("acp-builtin-model-0").waitFor({ timeout: 15_000 });
+    await page.getByRole("dialog").waitFor({ state: "detached", timeout: 10_000 });
+    observed.addedModel = (await card.getByTestId("acp-builtin-model-0").innerText()).trim();
+  }
+  if (apiKey) {
+    const reason = card.getByTestId("acp-builtin-reason");
+    observed.reasonBefore = (await reason.innerText().catch(() => "")).trim();
+    if (!/API key is not configured/.test(observed.reasonBefore))
+      throw new Error(`expected the missing-key status first, got "${observed.reasonBefore}"`);
+    const keyInput = card.getByTestId("acp-builtin-api-key");
+    await click(keyInput, "API key input");
+    // 回放用的是固定假 Key；实时模式仍经 stdin 播种，真实 Key 不进入 trace。
+    logAction({ action: "type", target: "API key input", text: "[replay dummy key]" });
+    await page.keyboard.type(apiKey, { delay: 5 });
+    await page.keyboard.press("Enter");
+    // 卡片翻转为已配置：缺少 Key 的原因消失，输入框清空（只写）并显示“已保存”占位。
+    await until(
+      async () =>
+        (await reason.count()) === 0 &&
+        (await keyInput.inputValue()) === "" &&
+        /Saved/.test((await keyInput.getAttribute("placeholder")) ?? ""),
+      30_000,
+      "API key saved and the card shows the configured state",
+    );
+    observed.placeholderAfter = await keyInput.getAttribute("placeholder");
+    await screenshot?.("settings-api-key-saved");
+  }
+  const row = card.getByTestId("acp-builtin-model-0");
+  if ((await row.count()) > 0) {
+    const toggle = card.getByTestId("acp-builtin-model-0-enabled");
+    if ((await toggle.getAttribute("aria-checked")) !== "true") {
+      await click(toggle, "enable model 0");
+      await until(
+        async () => (await toggle.getAttribute("aria-checked")) === "true",
+        30_000,
+        "model 0 enabled",
+      );
+    }
+    observed.enabled = (await row.innerText()).trim();
+  } else {
+    observed.enabled = await enableAdvertisedModel({ page, click }, card, {
+      wanted,
+      allowDefault,
+      strict,
+      timeoutMs,
+    });
+  }
+  await click(page.getByTestId("settings-back-button"), "Back to workspace");
+  await page.getByTestId("v4-composer-input").waitFor({ timeout: 30_000 });
+  return observed;
+}
+
+/** "Sync models" → switch the wanted advertised model on (configs without declared models). */
+async function enableAdvertisedModel({ click }, card, { wanted, allowDefault, strict, timeoutMs }) {
+  await click(card.getByTestId("acp-builtin-sync-models"), "Sync models");
+  const errors = card.locator('[role="alert"].text-destructive');
   const deadline = Date.now() + timeoutMs;
-  while ((await section.getByRole("switch").count()) === 0) {
+  while ((await card.locator("label").getByRole("switch").count()) === 0) {
     const alert = await errors.allInnerTexts().catch(() => []);
     if (alert.length) throw new Error(`model sync failed: ${alert.join(" | ")}`);
     if (Date.now() > deadline) throw new Error("model sync did not list any model");
     await sleep(300);
   }
-  // 每行模型：可见名称 + title（"<ACP 模型选项 ID> · <描述>"，ID 含 Runtime 公布的模型值）。
-  const models = await section.evaluate((element) =>
+  const models = await card.evaluate((element) =>
     [...element.querySelectorAll("label")]
       .filter((label) => label.querySelector('[role="switch"]'))
       .map((label) => ({
@@ -71,7 +147,6 @@ export async function enableModelInSettings(
         title: label.querySelector("[title]")?.getAttribute("title") ?? "",
       })),
   );
-  if (!models.length) throw new Error("no model rows next to the switches");
   const isDefault = (model) => /^Default\b/i.test(model.label);
   const chosen =
     models.find((model) => model.title.includes(wanted) || model.label.includes(wanted)) ??
@@ -82,25 +157,19 @@ export async function enableModelInSettings(
       `model ${wanted} is not advertised (${models.map((model) => model.label).join(", ")}); ` +
         "refusing to enable a different model",
     );
-  const control = section
+  const control = card
     .locator("label")
     .filter({ hasText: new RegExp(`^\\s*${escapeRegExp(chosen.label)}\\s*$`) })
     .first()
     .getByRole("switch");
   await click(control, `enable model ${chosen.label}`);
-  // 开关保存期间整组 disabled；保存成功后保持选中且可再次操作。
-  const saveDeadline = Date.now() + 30_000;
-  while (
-    !((await control.getAttribute("aria-checked")) === "true" && (await control.isEnabled()))
-  ) {
-    const alert = await errors.allInnerTexts();
-    if (alert.length) throw new Error(`saving the model selection failed: ${alert.join(" | ")}`);
-    if (Date.now() > saveDeadline) throw new Error(`model ${chosen.label} did not stay enabled`);
-    await sleep(200);
-  }
-  await click(page.getByTestId("settings-back-button"), "Back to workspace");
-  await page.getByTestId("v4-composer-input").waitFor({ timeout: 30_000 });
-  return { models: models.map((model) => model.label), enabled: chosen.label };
+  await until(
+    async () =>
+      (await control.getAttribute("aria-checked")) === "true" && (await control.isEnabled()),
+    30_000,
+    `model ${chosen.label} enabled`,
+  );
+  return chosen.label;
 }
 
 /** Existing composer model picker → hover the runtime's ACP group → click its (only) model. */

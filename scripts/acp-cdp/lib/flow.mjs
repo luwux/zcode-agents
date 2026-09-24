@@ -16,13 +16,16 @@ import {
 } from "./support.mjs";
 import { waitForTurn } from "./turn.mjs";
 import {
+  configureRuntimeInSettings,
   dismissOnboarding,
-  enableModelInSettings,
   expandTurnHistories,
   pickAcpSessionMode,
   pickRuntimeInModelPicker,
 } from "./ui.mjs";
 import { log, redact } from "./util.mjs";
+
+/** 回放模式在设置页经真实键入保存的假 Key（仅进入一次性数据目录的加密凭据库）。 */
+const REPLAY_KEY = "replay-dummy-key";
 
 const WORKAROUND_NOTE =
   "--seed-model-catalog: Settings › ACP sync skipped; the model catalog was written by the app's " +
@@ -128,11 +131,15 @@ export async function runCase(testCase, options) {
   const ui = () => ({
     page: app.page,
     logAction: app.logAction,
+    screenshot,
     click: async (locator, target) => {
       app.logAction({ action: "click", target });
       await locator.click();
     },
   });
+  // 回放用例经设置页添加模型并键入 Key（真实点击/键入）；实时用例与诊断变通仍播种，真实 Key 不进入 trace。
+  const configureInUi = !testCase.live && !workaround;
+  let uiModel = null;
 
   try {
     let workspace = null;
@@ -154,6 +161,11 @@ export async function runCase(testCase, options) {
         provider = testCase.provider(proxy.url, fixture.model);
         Object.assign(detail, { proxy: proxy.url, fixture: testCase.fixture });
       }
+      if (configureInUi) {
+        const { model, ...withoutModel } = provider;
+        uiModel = model;
+        provider = withoutModel;
+      }
       detail.seeded = await seedAgentConfigs({
         home: join(root, "home"),
         dataDir: join(root, "data"),
@@ -166,8 +178,8 @@ export async function runCase(testCase, options) {
             provider,
           },
         ],
-        apiKey: testCase.live ? options.apiKey : "replay-dummy-key",
-        apiKeyFor: [testCase.configId],
+        apiKey: testCase.live ? options.apiKey : configureInUi ? undefined : REPLAY_KEY,
+        apiKeyFor: configureInUi ? [] : [testCase.configId],
         discoverModelCatalogFor: workaround ? [testCase.configId] : [],
         workspace,
         extraEnv: { CODEZ_ACP_RUNTIMES_DIR: options.runtimesDir, ...options.appEnv },
@@ -192,14 +204,17 @@ export async function runCase(testCase, options) {
 
     if (workaround)
       result.steps.push({
-        name: "settings-sync-and-enable-model",
+        name: "settings-configure-and-enable-model",
         status: "skipped",
         reason: WORKAROUND_NOTE,
       });
     else
-      await step("settings-sync-and-enable-model", () =>
-        enableModelInSettings(ui(), {
+      await step("settings-configure-and-enable-model", () =>
+        configureRuntimeInSettings(ui(), {
+          configId: testCase.configId,
           configName: testCase.configName,
+          addModel: configureInUi ? uiModel : null,
+          apiKey: configureInUi ? REPLAY_KEY : null,
           wanted: testCase.live ? options.liveModel : fixture.model,
           // Claude 的 Default 经 ANTHROPIC_DEFAULT_*_MODEL 指向配置的模型；Live 下其他 Runtime 必须公布该模型本身。
           allowDefault: !testCase.live || testCase.runtime === "claude-code",

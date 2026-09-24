@@ -16,18 +16,25 @@ throwaway git workspace. Nothing touches your real `~/.claude`, `~/.codex`, `~/.
 
 1. **prepare** – create the workspace (`git init` + one commit), start
    `scripts/acp-replay/replay-proxy.mjs` for the case's fixture (replay mode), and seed
-   `<data>/.codez/v2/agent-configs.json` plus the API key with the app's own modules
-   (`saveAgentConfig`, `saveBuiltinConfigApiKey`; see `seed-agent-configs.ts`). The key is passed over
-   stdin only and lands only in the encrypted credential store of the throwaway data dir.
+   `<data>/.codez/v2/agent-configs.json` with the app's own modules (`saveAgentConfig`; see
+   `seed-agent-configs.ts`). Replay cases seed only the provider route (no model, no key): the model and
+   the key are entered in Settings in step 4. Live cases also seed the model and the key
+   (`saveBuiltinConfigApiKey`), passed over stdin only, so the real key is never typed into the app and
+   never appears in a trace; it lands only in the encrypted credential store of the throwaway data dir.
 2. **launch-app** – start Electron as
    `electron -r electron-app-version.cjs --remote-debugging-port=<port> packages/desktop --open-workspace=<ws>`
    (under `xvfb-run -a` on Linux without `DISPLAY`) and connect with `chromium.connectOverCDP`. The
    workspace is opened with the app's own `--open-workspace` command-line switch, so no native folder
    dialog is involved.
 3. **dismiss-onboarding** – click _Use API key_ → _Skip for now_ → _Exit onboarding_.
-4. **settings-sync-and-enable-model** – composer model picker → _Manage models_ → Settings › Model
-   settings › ACP › the seeded config → _同步 Agent 模型_ (sync) → switch one model on → _Back to
-   workspace_. This is the product path that makes a built-in runtime appear in the composer picker.
+4. **settings-configure-and-enable-model** – composer model picker → _Manage models_ → Settings › Model
+   settings › ACP › the seeded config (the built-in runtime card). Replay cases then click _Add model_,
+   type the fixture's model ID and _Save_, check the card reports "API key is not configured", click the
+   API key field, type the (dummy) key and press Enter, and wait until the card flips: the missing-key
+   status disappears and the field is empty again with a "Saved" placeholder (the key is write-only).
+   The declared model's switch must be on; configs without declared models use _Sync models_ and switch
+   the wanted advertised model on. → _Back to workspace_. Screenshots:
+   `settings-add-model-dialog`, `settings-api-key-saved`.
 5. **pick-runtime-in-model-picker** – open the existing composer model picker, hover the runtime's ACP
    group, click its model.
 6. **pick-acp-session-mode** (permission cases) – _ACP session mode_ → `Manual` (Claude Code) or
@@ -118,8 +125,7 @@ mise exec -- node scripts/acp-cdp/run-cdp-e2e.mjs --no-build --no-install --arti
 open ~/Desktop/codez-cdp-replay    # screenshots, summary.txt, traces
 ```
 
-Selectors use the English UI strings (plus the Chinese-only ACP settings strings such as
-_同步 Agent 模型_). The runner forces English with `LANG=en_US.UTF-8` / `--lang=en-US` and, on macOS,
+Selectors use the English UI strings and the `acp-builtin-*` test ids of the built-in runtime card. The runner forces English with `LANG=en_US.UTF-8` / `--lang=en-US` and, on macOS,
 with the process-local `-AppleLanguages (en-US)` override, so a Chinese system language does not change
 the app's language. If a case still fails at `dismiss-onboarding`, check its screenshot for the UI
 language.
@@ -195,6 +201,12 @@ reason, a write without a prompt ends as `FAILED`.
    `--no-build`) after a typecheck.
 6. Observed but not investigated: after a completed ACP session the sidebar still shows "No tasks yet"
    under the workspace.
+7. **Fixed in the replay proxy:** built-in Codex configs now write a private model catalog with only the
+   declared models. codex-acp's session title turn (hard-coded `gpt-5.6-luna`, not in that catalog) then
+   carries Codex's normal tool list, so the proxy took it for the next main turn and both Codex cases
+   failed with "runtime never ran past the fixture". The title turn always sets a JSON-schema output
+   format; `isMainResponsesRequest` (`scripts/acp-replay/replay-core.mjs`) treats such requests as side
+   requests.
 
 ## Unit tests for the runner's helpers
 

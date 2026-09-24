@@ -21,6 +21,16 @@ const PREFERRED_METHODS: Record<AgentConfig["runtime"], readonly string[]> = {
   pi: [],
 };
 
+/** 该 Runtime 是否有可用的订阅登录方法（Pi 没有，只能 BYOK 或沿用全局 CLI 登录）。 */
+export function supportsSubscriptionSignIn(runtime: AgentConfig["runtime"]): boolean {
+  return PREFERRED_METHODS[runtime].length > 0;
+}
+
+/** 设备码登录直接调用受管原生 codex（`codex login --device-auth`），只有 Codex 提供。 */
+export function supportsDeviceSignIn(runtime: AgentConfig["runtime"]): boolean {
+  return runtime === "codex";
+}
+
 export function selectAuthMethod(
   config: AgentConfig,
   methods: readonly AuthMethod[] | undefined,
@@ -103,7 +113,7 @@ function startLoginOnce(
     try {
       const launch = await deps.resolveLaunch(config);
       if (options.deviceAuth) {
-        if (config.runtime !== "codex")
+        if (!supportsDeviceSignIn(config.runtime))
           throw new Error("Device sign-in is only available for Codex");
         const codex = launch.env?.CODEX_PATH;
         if (!codex) throw new Error("Managed Codex binary is unavailable");

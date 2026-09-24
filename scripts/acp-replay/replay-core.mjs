@@ -130,3 +130,16 @@ export function responsesIsContinuation(body) {
 export function hasTools(body) {
   return Array.isArray(body.tools) && body.tools.length > 0;
 }
+
+/**
+ * A Responses request that advances the fixture: it carries the agent's tools and does not ask for
+ * structured output.
+ *
+ * 修复原因：内置 Codex 配置写入只含声明模型的私有 model_catalog_json 后，codex-acp 生成会话标题时
+ * 使用的硬编码模型不在该目录里，Codex 按默认元数据给这个标题回合附带完整工具列表。只按 tools 判断
+ * 会把标题请求当成主回合，提前消耗录制的下一回合。标题回合总是带 JSON Schema 输出格式
+ * （`text.format.type = "json_schema"`），主回合不会带，据此把它归为不推进夹具的旁路请求。
+ */
+export function isMainResponsesRequest(body) {
+  return hasTools(body) && body.text?.format?.type !== "json_schema";
+}

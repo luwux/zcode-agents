@@ -6,8 +6,10 @@
 
 ## Goals / Non-Goals
 
-- Goals：三个内置 Runtime 可直接选择；BYOK 与订阅两种认证；原生 home 隔离；可复现安装；离线回放与在线实测。
-- Non-Goals：新增前端 UI（沿用供应商卡片的 `installed/reason/models` 与模型选择器）；Windows 上的 Pi
+- Goals：三个内置 Runtime 可直接选择；BYOK 与订阅两种认证；原生 home 隔离；可复现安装；离线回放与在线实测；
+  在设置页 ACP 详情内完成配置（认证方式、Provider、Key、订阅登录、新增与删除配置），无需 CLI 脚本（见 D6）。
+- Non-Goals：独立于供应商列表的 Runtime 选择器或配置区域（配置只出现在既有 ACP 详情与 ACP 添加页）；
+  编辑配置 `env`（设置页保存时保留已有值）；Windows 上的 Pi
   （acp-extension-pi 在 Windows 需要 CI 预编译的 Job 原生模块，源码安装拿不到，明确报告不支持）。
 
 ## Decisions
@@ -53,7 +55,7 @@ secretEnv[], defaultModel?, preset?}`。`id` 即 `AgentRuntimeId`，与 `agent-s
 
 ```mermaid
 sequenceDiagram
-  participant UI as Renderer(现有卡片)
+  participant UI as Renderer(设置页 ACP 详情)
   participant S as ZCodeAgentService(Host)
   participant A as AuthStateStore(Host, 内存)
   participant C as AcpConnection
@@ -90,15 +92,99 @@ sequenceDiagram
 ### D5 验证
 
 - 单测：假 ACP Agent 驱动方法选择、env 剥离、状态迁移、闸门。
-- 离线：`scripts/acp-replay/replay-proxy.mjs` 回放 fixture（每个主请求推进一段；无 tools 的旁路请求返回固定短文本、
-  不推进）；e2e 在 `unshare -rn` + 仅 loopback 的网络命名空间中通过 CodeZ `AcpRuntimeCoordinator` 驱动真实 CLI。
+- 离线：`scripts/acp-replay/replay-proxy.mjs` 回放 fixture（每个主请求推进一段；无 tools 或带 JSON Schema 输出格式
+  （codex-acp 标题回合）的旁路请求返回固定短文本、不推进）；e2e 在 `unshare -rn` + 仅 loopback 的网络命名空间中通过 CodeZ `AcpRuntimeCoordinator` 驱动真实 CLI。
 - 在线：OpenRouter `xiaomi/mimo-v2.6-flash`，仅 GitHub Actions secret，缺失即跳过。
 - 桌面：`scripts/acp-cdp/run-cdp-e2e.mjs` 以 `--remote-debugging-port` 启动真实 Electron（生产构建的
   `packages/desktop/out`，Linux 无 DISPLAY 时经 `xvfb-run`，回放模式在仅 loopback 的网络命名空间内），
   Playwright `connectOverCDP` 只做真实点击/悬停/键入与只读 DOM 断言；每个用例使用一次性 HOME、数据目录与
   git workspace，经 `--open-workspace` 打开，经设置页「同步 Agent 模型」启用模型后在 composer 模型选择器中
   选择 Runtime。产物为逐步截图、Playwright trace、CDP 事件 JSONL 与 app/proxy 日志；无法运行的用例以
-  SKIPPED + 原因报告（Pi 无权限请求）。
+  SKIPPED + 原因报告（Pi 无权限请求）。回放用例只播种 Provider 路由（不含模型与 Key）：在设置页经真实点击/键入
+  「添加模型」并在密码框输入 Key 回车保存，断言卡片从 “API key is not configured” 翻转为已配置、输入框清空，
+  再在输入框模型选择器中选择该模型发送（Key 只进入临时数据目录的加密凭据库）；实时用例仍经 stdin 播种 Key，
+  真实 Key 不进入 trace。
+- 声明模型：`test/e2e/builtinModelsReplay.e2e.ts` 以固定版本的真实 CLI 断言适配器公布的模型选项 ID 与推理档位
+  与配置推出的一致，且所选模型与推理档位出现在发往回放代理的请求中（`replay-proxy` 记录 model/thinking/
+  output_config/reasoning 参数，不含消息内容）。
+
+### D6 设置页配置（取代原“不新增 UI”约束）
+
+入口是既有的 设置 › 模型 › ACP › <配置>（`AcpProviderDetail`）：状态含 `builtin` 时展示与自定义 API 供应商
+卡片相同结构的卡片（复用 `ProviderCardHeader`、Base URL/API 格式字段样式、`ProviderApiKeySection`、
+模型列表容器与 `SortableProviderModelList`、模型编辑弹窗的分组/选项/页脚组件）：标题栏启停开关与 ⋯ 菜单
+（重命名、删除/恢复默认）、登录方式、BYOK 的 Provider 预设（填充默认 Base URL）/Base URL/API 格式（Pi 自定义端点）/
+只写 API Key、订阅与本机登录的登录面板、模型列表（添加、编辑、删除、启停、拖动排序）。与自定义供应商卡片一样，
+修改在切换/失焦/回车时立即保存并显示保存反馈。ACP 添加页在默认的自定义命令表单旁增加「内置 Runtime」分段，
+选择 Runtime、ID、显示名与首次连接设置后创建。不新增独立的 Runtime 选择器或配置区域。
+
+所有者（均不在 Renderer 复制）：
+
+| 状态           | 唯一所有者                                | Renderer 持有                                            |
+| -------------- | ----------------------------------------- | -------------------------------------------------------- |
+| 配置（含模型） | `agent-configs.json`（Host registry）     | 未提交的输入；写入队列以 Host 最近返回的配置为基线       |
+| API Key        | Host 加密凭据库                           | 只写的密码框输入，保存成功即清空；只读 `hasApiKey`       |
+| 认证状态       | `AcpAuthStateStore`（Host 内存）          | 无；变化事件只触发重新读取                               |
+| 同步模型目录   | `acpProviderModels`（Host）               | 同步结果的展示；路由变化后丢弃（模型区按路由键重新挂载） |
+| Runtime/预设表 | 代码常量（`listBuiltinRuntimeCatalog()`） | 只读视图，不复制预设表、模型字段支持与档位               |
+
+```mermaid
+sequenceDiagram
+  participant UI as Renderer 设置页（输入草稿 + 串行写入队列）
+  participant S as ZCodeAgentService(Local Host)
+  participant R as agent-configs.json / 加密凭据库
+  participant A as AcpAuthStateStore(Host 内存)
+  UI->>S: saveAgentRuntimeConfig(基线 + 本次修改, apiKey?, create?)
+  Note over S: zod 校验入参 → Claude 模型持久化稳定槽位 → parseAgentConfig 校验内容
+  S->>R: saveAgentConfig（env 省略则保留）+ saveBuiltinConfigApiKey
+  S->>A: 路由/认证方式变化或提交 Key 时 reset(id)；路由变化时清空同步目录
+  S-->>UI: listAgentRuntimes()（hasApiKey 与声明模型，不含 Key）→ 新基线
+  A-->>UI: onDynamicAgentRuntimeAuthChange {runtimeId, state}
+  UI->>S: listAgentRuntimes()（过期结果按请求序号丢弃）
+  UI->>S: loginAgentRuntime {runtimeId, deviceAuth?}
+  S->>A: markAuthenticating → 事件 → UI 重读
+  S-->>UI: {state, message}（≤20s：登录 URL / 设备码 / 失败原因）
+  Note over S: 登录进程继续（≤10min，同一配置复用进行中的流程）
+  S->>A: markAuthenticated / markAuthRequired → 事件 → UI 重读，卡片翻转
+```
+
+- 校验：Host 以 zod 校验 RPC 入参（`apiKey` 仅 `string | null | undefined`，`create`/`enabled` 为布尔，ID 符合
+  `agentRuntimeIdSchema`），配置内容仍由 `parseAgentConfig` 严格校验（模型 ID 唯一且无空白、数量上限、
+  字段类型、Claude 槽位唯一）；Renderer 只做前置提示。`create: true` 时 ID 已被内置配置（含默认配置）或
+  自定义 ACP Server 占用即拒绝，不覆盖既有配置。
+- 写入：卡片内所有修改经同一个串行队列提交完整配置，每次以 Host 返回的已保存配置为基线，快速连续操作不会用
+  过期基线互相覆盖；预设改变时丢弃旧预设的路由字段（`baseUrl`、`api`、`providerId`、`wireApi`、`smallModel`、
+  `timeoutMs`），保留模型列表；端点等于预设默认值时不保存覆盖值。「清除 Key」以已保存配置 + `apiKey: null` 提交。
+  改名、启停与编辑模型列表不重置认证状态、不清空同步目录。
+- 声明模型（`provider.models`，旧版 `model` 视为一项）：`{id, name?, enabled?, reasoning?, reasoningLevels?,
+contextWindow?, maxTokens?, vision?, slot?}`。Runtime 原生列出这些模型，选择器条目（选项 ID 与推理档位）由配置
+  直接推出，无需先同步：
+  - Claude：最多 5 个，依次占用 opus/sonnet/haiku/fable 别名槽与自定义选项（`_NAME` 为显示名）；槽位在保存时
+    持久化，删除或调序其他模型不会让既有会话的别名改指；空出的 opus/sonnet 槽指向默认模型。2.1.280 对网关
+    模型总是发送 adaptive thinking 与所选 effort（回放代理记录已验证），`_SUPPORTED_CAPABILITIES` 不改变请求，
+    因此不提供按模型的推理设置，档位为其固定的 effort 列表。
+  - Codex：修复原因——目录外模型使用兜底元数据，没有推理档位，且 OpenAI 预设按 slug 发往网关必然失败。
+    私有 `CODEX_HOME` 写入只含声明模型的 `model_catalog_json`（按 0.156.1 的 `ModelInfo` 结构，其余字段沿用
+    兜底元数据，含随源码提交的兜底提示词），预设消失，档位按模型设置（默认 low/medium/high）。
+  - Pi：修复原因——models.json 的 `reasoning` 缺省为 false，Pi 只提供 “off”。自定义端点按推理模型写入全部声明
+    模型（`thinkingLevelMap` 收窄档位，`contextWindow`/`maxTokens`/`input` 按设置）。
+  - 未声明模型（订阅、本机登录、或无模型的 BYOK）时沿用“同步 Agent 模型”的缓存与逐个启用。
+  - 停用的配置（`enabled: false`）不在输入框模型选择器中提供，设置页仍可见。
+- 目录：`listBuiltinRuntimeCatalog()` 返回认证方式、预设（默认 Base URL、是否必须填 Base URL / 模型、
+  Pi 自定义端点协议）、是否支持订阅登录与设备码、模型数上限、可编辑的模型字段与档位、默认配置 ID、
+  当前平台不支持原因。
+- 登录：`loginAgentRuntime({runtimeId, methodId?, deviceAuth?})` / `logoutAgentRuntime({runtimeId})` 不再
+  接收 workspace。修复原因：设置页的 workspacePath 可能是远程 workspace 路径或为空，在 Local Host 上作为
+  cwd 会 ENOENT；登录与工作区无关，登录/登出进程 cwd 改为该配置目录 `<数据根>/acp-homes/<id>`（按需 0700 创建）。
+  Renderer 把消息中的 http(s) URL 渲染为经 `IPlatformService.openExternal` 打开的链接，设备码可选中复制；
+  消息表明方法需要交互式终端时提示 `scripts/acp-runtimes/login.ts <id>`。cli-login 不提供登出（Host 拒绝）。
+- 删除：默认配置不可删除；覆盖默认 ID 的条目显示为“恢复默认”；确认后 Host 登出、删除 Key 与私有 home。
+  修复：私有 home 不存在时跳过登出（没有 home 就不可能有该配置的凭据），避免为删除一个从未使用的订阅配置
+  触发数百 MB 的首次安装。
+- 时序与幂等：多次认证事件只导致多次重读；Renderer 以递增请求序号只采用最新的 `listAgentRuntimes` 结果，
+  写入返回的列表同样推进序号。事件不携带消息或秘密。该事件是 Host 事实的触发器，不属于 conversation
+  stream/snapshot，`desktop-continuous` 与 `web-remote-replayable` 连接语义相同（手机 Web 在其所连 Host 上配置）。
+- 布局：沿用自定义供应商卡片的单列字段、按钮换行与紧凑列表；文案走 i18n（zh-CN/en-US）。
 
 ## Risks / Trade-offs
 

@@ -3,7 +3,10 @@
 //
 //   read -rs KEY; printf %s "$KEY" | node --import tsx scripts/acp-runtimes/configure.ts \
 //     claude-openrouter --runtime claude-code --auth byok --preset openrouter \
-//     --model xiaomi/mimo-v2.6-flash --key-stdin; unset KEY
+//     --model xiaomi/mimo-v2.6-flash --model deepseek/deepseek-v4.1-flash --key-stdin; unset KEY
+//
+// `--model` may repeat; it replaces the configured model list (per-model settings of models that stay
+// are kept). Settings › Model settings › ACP edits the same configuration.
 //
 //   node --import tsx scripts/acp-runtimes/configure.ts codex --runtime codex --auth subscription
 //   node --import tsx scripts/acp-runtimes/configure.ts --list
@@ -17,6 +20,7 @@ import {
   saveBuiltinRuntimeConfig,
 } from "../../packages/services/src/agent-runtime/builtin/builtinRuntimeService.ts";
 import { listBuiltinRuntimeStatuses } from "../../packages/services/src/agent-runtime/builtin/builtinRuntimeStatus.ts";
+import { configuredModels } from "../../packages/services/src/agent-runtime/builtin/builtinModels.ts";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -26,7 +30,7 @@ const { positionals, values } = parseArgs({
     auth: { type: "string" },
     preset: { type: "string" },
     "base-url": { type: "string" },
-    model: { type: "string" },
+    model: { type: "string", multiple: true },
     "small-model": { type: "string" },
     "provider-id": { type: "string" },
     "wire-api": { type: "string" },
@@ -44,6 +48,7 @@ if (values.list) {
     console.log(
       `${status.id.padEnd(24)} ${status.builtin.runtime.padEnd(12)} auth=${status.builtin.authMode.padEnd(12)} ` +
         `key=${status.builtin.hasApiKey ? "yes" : "no "} installed=${status.builtin.managedInstalled ? "yes" : "no "}` +
+        `${status.builtin.models.length ? ` models=${status.builtin.models.map((model) => model.id).join(",")}` : ""}` +
         `${status.reason ? `  (${status.reason})` : ""}`,
     );
   for (const issue of issues) console.log(`INVALID ${issue.id}: ${issue.message}`);
@@ -70,11 +75,17 @@ if (values["key-stdin"]) {
   apiKey = Buffer.concat(chunks).toString("utf8").trim();
   if (!apiKey) throw new Error("--key-stdin was given but stdin was empty");
 } else if (values["clear-key"]) apiKey = null;
+const { model: _legacyModel, ...existingProvider } = existing?.provider ?? {};
+const previousModels = configuredModels(existing?.provider);
 const provider = {
-  ...existing?.provider,
+  ...(values.model?.length ? existingProvider : existing?.provider),
   ...(values.preset ? { preset: values.preset } : {}),
   ...(values["base-url"] ? { baseUrl: values["base-url"] } : {}),
-  ...(values.model ? { model: values.model } : {}),
+  ...(values.model?.length
+    ? {
+        models: values.model.map((id) => previousModels.find((model) => model.id === id) ?? { id }),
+      }
+    : {}),
   ...(values["small-model"] ? { smallModel: values["small-model"] } : {}),
   ...(values["provider-id"] ? { providerId: values["provider-id"] } : {}),
   ...(values["wire-api"] ? { wireApi: values["wire-api"] as "responses" | "chat" } : {}),

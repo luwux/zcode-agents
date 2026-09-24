@@ -1,6 +1,18 @@
 import { join } from "node:path";
 import type { AgentConfig } from "#src/agent-runtime/builtin/agentConfigRegistry.js";
-import { resolveProviderSettings } from "#src/agent-runtime/builtin/builtinProviderPresets.js";
+import {
+  resolveProviderSettings,
+  type AgentModelSettings,
+} from "#src/agent-runtime/builtin/builtinProviderPresets.js";
+import {
+  CLAUDE_MODEL_SLOTS,
+  PI_CUSTOM_PROVIDER_ID,
+  claudeSlotAssignments,
+  configuredModels,
+  defaultConfiguredModel,
+  effectiveReasoningLevels,
+} from "#src/agent-runtime/builtin/builtinModels.js";
+import { codexModelCatalog } from "#src/agent-runtime/builtin/builtinCodexModelCatalog.js";
 
 /**
  * 子进程只继承这些宿主变量。白名单天然去掉宿主里的 Provider 凭据与路由变量
@@ -100,7 +112,8 @@ const CUSTOM_PROVIDER_ID = "custom";
 // 修复原因：provider ID 与 Codex 内置 provider（openai、ollama、lmstudio、oss…）同名时，config 覆盖会与内置
 // 定义冲突，session/new 返回 -32000。托管 ID 一律加前缀，与内置命名空间隔离。
 const CODEX_PROVIDER_PREFIX = "codez-";
-const PI_CUSTOM_PROVIDER_ID = "codez";
+/** 私有 CODEX_HOME 中的模型目录文件名（config.toml 的 model_catalog_json 指向它）。 */
+export const CODEX_MODEL_CATALOG_FILE = "codez-model-catalog.json";
 
 export interface BuiltinLaunchEnvInput {
   config: AgentConfig;
@@ -200,13 +213,27 @@ function applyClaude(
   } else {
     env.ANTHROPIC_API_KEY = input.apiKey ?? "";
   }
-  if (settings.model) {
-    env.ANTHROPIC_DEFAULT_OPUS_MODEL = settings.model;
-    env.ANTHROPIC_DEFAULT_SONNET_MODEL = settings.model;
+  const models = configuredModels(settings);
+  // 声明的模型依次占用 opus/sonnet/haiku/fable/自定义选项槽，适配器据此列出这些模型（上限 5 个）。
+  // 不写 `<槽>_SUPPORTED_CAPABILITIES`：2.1.280 对网关模型总是发送 adaptive thinking 与所选 effort，
+  // 该变量不改变请求（回放代理记录的请求体已验证），推理档位由 Claude 自己的 effort 选项控制。
+  const slots = claudeSlotAssignments(models);
+  models.forEach((model, index) => {
+    const slot = CLAUDE_MODEL_SLOTS[slots[index]!]?.env;
+    if (!slot) return;
+    env[slot] = model.id;
+    env[`${slot}_NAME`] = model.name ?? model.id;
+  });
+  const primary = defaultConfiguredModel(models)?.id;
+  // 未占用的 opus/sonnet 槽指向默认模型，避免别名（含 “Default”）落到网关不认识的 Claude 官方模型名；
+  // haiku 槽同时承担后台小任务（标题、摘要），缺省使用 smallModel 或默认模型。
+  if (primary) {
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL ??= primary;
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL ??= primary;
   }
-  const small = settings.smallModel ?? settings.model;
+  const small = settings.smallModel ?? primary;
   if (small) {
-    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = small;
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL ??= small;
     env.ANTHROPIC_SMALL_FAST_MODEL = small;
   }
   if (settings.timeoutMs) env.API_TIMEOUT_MS = String(settings.timeoutMs);
@@ -238,6 +265,8 @@ function applyCodex(
   }
   const settings = resolveProviderSettings("codex", input.config.provider);
   if (!input.apiKey) plan.problem = "API key is required for this configuration";
+  const models = configuredModels(settings);
+  const defaultModel = defaultConfiguredModel(models)?.id;
   const providerId = `${CODEX_PROVIDER_PREFIX}${settings.providerId ?? CUSTOM_PROVIDER_ID}`;
   const baseUrl = settings.baseUrl ?? "https://api.openai.com/v1";
   // 通过 codex-acp 的 CODEX_CONFIG 注入会话级覆盖；密钥只经 env_key 指向的变量传递，不写入 config.toml。
@@ -252,7 +281,7 @@ function applyCodex(
         requires_openai_auth: false,
       },
     },
-    ...(settings.model ? { model: settings.model } : {}),
+    ...(defaultModel ? { model: defaultModel } : {}),
   };
   env.CODEX_CONFIG = JSON.stringify(codexConfig);
   env.MODEL_PROVIDER = providerId;
@@ -260,21 +289,35 @@ function applyCodex(
   // 修复原因：codex-acp 的登录判定读 app-server 自身配置（当前 provider 的 requires_openai_auth），
   // CODEX_CONFIG 只作用于会话线程，导致 BYOK 被误判为需要 ChatGPT 登录。这里在该配置私有的
   // CODEX_HOME 写入同样的非秘密路由（密钥仍只经 env_key 引用），从不触碰用户的 ~/.codex。
-  if (configToml)
-    plan.files.push({ path: configToml, content: codexConfigToml(providerId, codexConfig) });
+  if (!configToml) return;
+  // 修复原因：Codex 对目录外的模型使用兜底元数据（无推理档位，界面只剩“关闭”），并继续列出 OpenAI 预设
+  // （按其 slug 发往网关必然失败）。BYOK 配置在私有 CODEX_HOME 写入只含声明模型的目录，
+  // 由 config.toml 的 model_catalog_json 指向它：预设消失，推理档位按每个模型的设置提供。
+  const catalog = models.length ? join(input.configHome, "codex", CODEX_MODEL_CATALOG_FILE) : null;
+  if (catalog)
+    plan.files.push({
+      path: catalog,
+      content: `${JSON.stringify(codexModelCatalog(models), null, 2)}\n`,
+    });
+  plan.files.push({ path: configToml, content: codexConfigToml(providerId, codexConfig, catalog) });
 }
 
 const MANAGED_TOML_HEADER =
   "# Managed by CodeZ for this agent configuration. Changes are overwritten.";
 
 /** 只序列化本模块生成的固定结构；字符串用 JSON 转义（与 TOML basic string 兼容）。 */
-function codexConfigToml(providerId: string, config: Record<string, unknown>): string {
+function codexConfigToml(
+  providerId: string,
+  config: Record<string, unknown>,
+  modelCatalog: string | null,
+): string {
   const provider = (config.model_providers as Record<string, Record<string, unknown>>)[providerId]!;
   const value = (entry: unknown) =>
     typeof entry === "string" ? JSON.stringify(entry) : String(entry);
   const lines = [MANAGED_TOML_HEADER, ""];
   lines.push(`model_provider = ${value(providerId)}`);
   if (typeof config.model === "string") lines.push(`model = ${value(config.model)}`);
+  if (modelCatalog) lines.push(`model_catalog_json = ${value(modelCatalog)}`);
   lines.push("", `[model_providers.${JSON.stringify(providerId)}]`);
   for (const [key, entry] of Object.entries(provider)) lines.push(`${key} = ${value(entry)}`);
   return `${lines.join("\n")}\n`;
@@ -297,12 +340,14 @@ function applyPi(
   if (!byok) return;
   const settings = resolveProviderSettings("pi", input.config.provider);
   if (!input.apiKey) plan.problem = "API key is required for this configuration";
+  const models = configuredModels(settings);
+  const defaultModel = defaultConfiguredModel(models)?.id;
   if (settings.baseUrl) {
     if (!agentDir) {
       plan.problem ??= "Custom Pi endpoints require a private CodeZ home";
       return;
     }
-    if (!settings.model) plan.problem ??= "A model is required for a custom Pi endpoint";
+    if (!defaultModel) plan.problem ??= "A model is required for a custom Pi endpoint";
     // models.json 只含 `$VAR` 引用，密钥在 spawn 时经 env 注入，不落盘。
     plan.files.push({
       path: join(agentDir, "models.json"),
@@ -313,7 +358,7 @@ function applyPi(
               baseUrl: settings.baseUrl,
               api: settings.api ?? "openai-completions",
               apiKey: `$${PI_PROVIDER_KEY_ENV}`,
-              models: settings.model ? [{ id: settings.model }] : [],
+              models: models.map(piModelEntry),
             },
           },
         },
@@ -329,5 +374,31 @@ function applyPi(
     env[keyEnv] = input.apiKey ?? "";
     plan.args.push("--provider", provider);
   }
-  if (settings.model) plan.args.push("--model", settings.model);
+  if (defaultModel) plan.args.push("--model", defaultModel);
+}
+
+const PI_STANDARD_LEVELS = ["minimal", "low", "medium", "high"] as const;
+const PI_EXTENDED_LEVELS = ["xhigh", "max"] as const;
+
+/**
+ * Pi models.json 的模型条目。修复原因：`reasoning` 缺省为 false，Pi 因而只提供 “off” 思考档位，
+ * 输入框推理选择器对 deepseek/deepseek-v4.1-flash 等推理模型也只剩“关闭”。自定义端点的模型默认按支持推理
+ * 写入（OpenRouter 对不推理的模型会忽略 reasoning_effort），并按用户设置收窄档位、上下文与输入模态。
+ */
+function piModelEntry(model: AgentModelSettings): Record<string, unknown> {
+  const levels = effectiveReasoningLevels(model);
+  // thinkingLevelMap：省略的标准档位走 Pi 默认映射，null 表示不提供；xhigh/max 需要显式给出取值才可用。
+  const thinkingLevelMap = Object.fromEntries([
+    ...PI_STANDARD_LEVELS.filter((level) => !levels.includes(level)).map((level) => [level, null]),
+    ...PI_EXTENDED_LEVELS.filter((level) => levels.includes(level)).map((level) => [level, level]),
+  ]);
+  return {
+    id: model.id,
+    ...(model.name ? { name: model.name } : {}),
+    reasoning: levels.length > 0,
+    ...(levels.length && Object.keys(thinkingLevelMap).length ? { thinkingLevelMap } : {}),
+    ...(model.vision === undefined ? {} : { input: model.vision ? ["text", "image"] : ["text"] }),
+    ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+    ...(model.maxTokens ? { maxTokens: model.maxTokens } : {}),
+  };
 }

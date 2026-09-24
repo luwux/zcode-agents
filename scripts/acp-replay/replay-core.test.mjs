@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   anthropicIsContinuation,
   buildSegments,
+  isMainResponsesRequest,
   ReplayCursor,
   responsesIsContinuation,
   substituteWorkspace,
@@ -66,6 +67,21 @@ test("continuation detection matches Claude Code and Codex request shapes", () =
     true,
   );
   assert.equal(responsesIsContinuation({ input: [{ type: "message", role: "user" }] }), false);
+});
+
+test("structured-output Responses requests are side requests even with tools", () => {
+  const tools = [{ type: "function", name: "exec_command" }];
+  assert.equal(isMainResponsesRequest({ tools, input: [] }), true);
+  assert.equal(isMainResponsesRequest({ tools: [], input: [] }), false);
+  // codex-acp 的标题回合：带完整工具列表，但要求 JSON Schema 输出。
+  assert.equal(
+    isMainResponsesRequest({
+      tools,
+      text: { format: { type: "json_schema", name: "codex_output_schema", schema: {} } },
+    }),
+    false,
+  );
+  assert.equal(isMainResponsesRequest({ tools, text: { verbosity: "low" } }), true);
 });
 
 test("workspace placeholder is substituted everywhere", () => {

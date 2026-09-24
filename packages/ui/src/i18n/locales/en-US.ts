@@ -3730,6 +3730,108 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.acpEdit": "Edit configuration",
   "settings.modelProvider.acpDeleteDescription":
     "This provider will no longer be available. Existing conversations remain visible but cannot continue with another Agent.",
+  "settings.modelProvider.showApiKey": "Show API key",
+  "settings.modelProvider.hideApiKey": "Hide API key",
+  "settings.modelProvider.builtinAcp.description":
+    "Built-in {runtime} {version}. CodeZ installs it on first use and keeps its sessions and sign-in in a private folder for this configuration.",
+  "settings.modelProvider.builtinAcp.configFile": "Config file: {path}",
+  "settings.modelProvider.builtinAcp.signInMethod": "Sign-in method",
+  "settings.modelProvider.builtinAcp.auth.subscription": "Subscription",
+  "settings.modelProvider.builtinAcp.auth.byok": "API key",
+  "settings.modelProvider.builtinAcp.auth.cliLogin": "Use my CLI login",
+  "settings.modelProvider.builtinAcp.auth.subscriptionHint":
+    "Sign in with your {runtime} subscription. The login is stored only in this configuration's private folder.",
+  "settings.modelProvider.builtinAcp.auth.byokHint":
+    "Requests go to the provider below with your API key. The key is stored encrypted and never shown again.",
+  "settings.modelProvider.builtinAcp.auth.cliLoginHint":
+    "Uses the login of the {runtime} CLI installed on this computer (its global home folder).",
+  "settings.modelProvider.builtinAcp.provider": "Provider",
+  "settings.modelProvider.builtinAcp.preset.custom": "Custom endpoint",
+  "settings.modelProvider.builtinAcp.providerDefaultEndpoint": "Provider's default endpoint",
+  "settings.modelProvider.builtinAcp.apiKeySavedPlaceholder":
+    "Saved. Enter a new key to replace it",
+  "settings.modelProvider.builtinAcp.apiKeyMissing": "No API key saved yet",
+  "settings.modelProvider.builtinAcp.clearApiKey": "Clear saved key",
+  "settings.modelProvider.builtinAcp.baseUrlRequired":
+    "Enter the endpoint URL for this custom provider",
+  "settings.modelProvider.builtinAcp.baseUrlInvalid": "The endpoint must be an http(s) URL",
+  "settings.modelProvider.builtinAcp.account": "Account",
+  "settings.modelProvider.builtinAcp.state.authenticated": "Signed in",
+  "settings.modelProvider.builtinAcp.state.authenticating": "Signing in…",
+  "settings.modelProvider.builtinAcp.state.authRequired": "Sign-in required",
+  "settings.modelProvider.builtinAcp.state.unknown":
+    "Not checked yet. The login is checked when a session starts or after you sign in.",
+  "settings.modelProvider.builtinAcp.signIn": "Sign in",
+  "settings.modelProvider.builtinAcp.signInDevice": "Use device code",
+  "settings.modelProvider.builtinAcp.signOut": "Sign out",
+  "settings.modelProvider.builtinAcp.signInStarting": "Starting sign-in…",
+  "settings.modelProvider.builtinAcp.openSignInPage": "Open sign-in page",
+  "settings.modelProvider.builtinAcp.copyCode": "Copy code",
+  "settings.modelProvider.builtinAcp.codeCopied": "Copied",
+  "settings.modelProvider.builtinAcp.terminalHint":
+    "This sign-in method needs a terminal. Quit CodeZ, then run this command in the CodeZ source folder:",
+  "settings.modelProvider.builtinAcp.cliLoginSignOutHint":
+    "To sign out, use the {runtime} CLI itself. CodeZ never changes your global login.",
+  "settings.modelProvider.builtinAcp.syncModels": "Sync models",
+  "settings.modelProvider.builtinAcp.syncing": "Syncing…",
+  "settings.modelProvider.builtinAcp.agentModelsHint":
+    "Models offered by {runtime}. Sync to refresh the list, then turn on the ones to show in chat.",
+  "settings.modelProvider.builtinAcp.enabledCount":
+    "{count} models enabled. Sync to change the selection.",
+  "settings.modelProvider.builtinAcp.claudeReasoningHint":
+    "Claude Code decides how gateway models think; choose the effort level in the chat composer.",
+  "settings.modelProvider.builtinAcp.displayName": "Display name",
+  "settings.modelProvider.builtinAcp.contextWindow": "Context window (tokens)",
+  "settings.modelProvider.builtinAcp.maxTokens": "Max output tokens",
+  "settings.modelProvider.builtinAcp.runtimeDefault": "Runtime default",
+  "settings.modelProvider.builtinAcp.vision": "Image input",
+  "settings.modelProvider.builtinAcp.reasoning": "Reasoning",
+  "settings.modelProvider.builtinAcp.reasoningLevels": "Reasoning levels",
+  "settings.modelProvider.builtinAcp.level.minimal": "Minimal",
+  "settings.modelProvider.builtinAcp.level.low": "Low",
+  "settings.modelProvider.builtinAcp.level.medium": "Medium",
+  "settings.modelProvider.builtinAcp.level.high": "High",
+  "settings.modelProvider.builtinAcp.level.xhigh": "Extra high",
+  "settings.modelProvider.builtinAcp.level.max": "Max",
+  "settings.modelProvider.builtinAcp.issue.modelIdRequired": "Enter a model ID",
+  "settings.modelProvider.builtinAcp.issue.modelIdInvalid": "Model IDs cannot contain spaces",
+  "settings.modelProvider.builtinAcp.issue.modelIdTaken": "This model is already in the list",
+  "settings.modelProvider.builtinAcp.issue.tooManyModels":
+    "{runtime} supports up to {max} models per configuration",
+  "settings.modelProvider.builtinAcp.issue.contextWindowInvalid":
+    "The context window must be a positive whole number",
+  "settings.modelProvider.builtinAcp.issue.maxTokensInvalid":
+    "Max output tokens must be a positive whole number",
+  "settings.modelProvider.builtinAcp.issue.reasoningLevelsRequired":
+    "Choose at least one reasoning level",
+  "settings.modelProvider.builtinAcp.issue.nameRequired": "Enter a display name",
+  "settings.modelProvider.builtinAcp.issue.idInvalid":
+    "Use lowercase letters, digits and hyphens, starting with a letter",
+  "settings.modelProvider.builtinAcp.issue.idTaken":
+    "This ID is already used by another ACP provider",
+  "settings.modelProvider.builtinAcp.issue.modelRequired": "Enter a model for this provider",
+  "settings.modelProvider.builtinAcp.issue.apiKeyRequired": "Enter the API key",
+  "settings.modelProvider.builtinAcp.issue.baseUrlRequired":
+    "Enter the endpoint URL for this custom provider",
+  "settings.modelProvider.builtinAcp.issue.baseUrlInvalid": "The endpoint must be an http(s) URL",
+  "settings.modelProvider.builtinAcp.deleteDescription":
+    "Removes this configuration, its saved API key and its private sign-in data. Existing conversations stay visible but cannot continue.",
+  "settings.modelProvider.builtinAcp.resetAction": "Reset to default",
+  "settings.modelProvider.builtinAcp.resetTitle": "Reset “{name}” to the default?",
+  "settings.modelProvider.builtinAcp.resetDescription":
+    "Your changes, the saved API key and the private sign-in data of this configuration are removed and the built-in default is restored.",
+  "settings.modelProvider.builtinAcp.createTab.custom": "Custom command",
+  "settings.modelProvider.builtinAcp.createTab.builtin": "Built-in runtime",
+  "settings.modelProvider.builtinAcp.createHint":
+    "Adds another Claude Code, Codex or Pi configuration with its own sign-in or API key and a private data folder.",
+  "settings.modelProvider.builtinAcp.runtime": "Runtime",
+  "settings.modelProvider.builtinAcp.configId": "Stable ID",
+  "settings.modelProvider.builtinAcp.model": "Model",
+  "settings.modelProvider.builtinAcp.modelPlaceholder": "e.g. deepseek/deepseek-v4.1-flash",
+  "settings.modelProvider.builtinAcp.create": "Add configuration",
+  "settings.modelProvider.builtinAcp.creating": "Adding…",
+  "settings.modelProvider.builtinAcp.catalogUnavailable":
+    "Built-in runtimes are unavailable: {error}",
   "settings.modelProvider.testModel": "Test model",
   "settings.modelProvider.testModel.enableProviderFirst": "Enable the provider first",
   "settings.modelProvider.testModel.providerUnavailable":

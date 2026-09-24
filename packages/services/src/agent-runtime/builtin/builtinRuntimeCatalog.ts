@@ -24,6 +24,8 @@ export interface BuiltinRuntimeDefinition {
     paths: readonly string[];
   };
   authModes: readonly AgentAuthMode[];
+  /** BYOK 可声明的模型数上限（Claude 只有 opus/sonnet/haiku/fable 四个别名槽 + 一个自定义选项）。 */
+  maxConfiguredModels: number;
   /** 受管原生二进制候选（相对安装目录）；安装发布前与启动时都必须存在其一。 */
   nativeBinaryCandidates(platform: NodeJS.Platform, arch: string, musl: boolean): string[];
   /** 适配器本身是否需要 ELECTRON_RUN_AS_NODE 传给其子进程（Pi 以 process.execPath 启动 pi）。 */
@@ -42,6 +44,7 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
     lockfile: claudeCodeLock,
     adapterEntry: "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
     authModes: ["subscription", "byok", "cli-login"],
+    maxConfiguredModels: 5,
     nativeBinaryCandidates: (platform, arch, musl) =>
       claudeNativeBinaryCandidates(platform, arch, musl),
     childrenNeedNodeMode: false,
@@ -54,6 +57,7 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
     lockfile: codexLock,
     adapterEntry: "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
     authModes: ["subscription", "byok", "cli-login"],
+    maxConfiguredModels: 64,
     nativeBinaryCandidates: (platform, arch) => {
       const candidate = codexNativeBinaryCandidate(platform, arch);
       return candidate ? [candidate] : [];
@@ -73,6 +77,7 @@ export const BUILTIN_RUNTIME_DEFINITIONS: Readonly<
       paths: ["src", "tsconfig.json", "package.json", "LICENSE"],
     },
     authModes: ["byok", "cli-login"],
+    maxConfiguredModels: 64,
     nativeBinaryCandidates: () => [],
     childrenNeedNodeMode: true,
     // acp-extension-pi 在 Windows 依赖 CI 预编译的 Job 原生模块；源码安装无法获得，缺失时适配器会拒绝启动。

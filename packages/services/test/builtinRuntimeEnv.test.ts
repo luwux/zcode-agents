@@ -4,6 +4,7 @@ import test from "node:test";
 import type { AgentConfig } from "../src/agent-runtime/builtin/agentConfigRegistry.js";
 import {
   buildBuiltinLaunchEnv,
+  CODEX_MODEL_CATALOG_FILE,
   CODEX_PROVIDER_KEY_ENV,
   PI_PROVIDER_KEY_ENV,
 } from "../src/agent-runtime/builtin/builtinRuntimeEnv.js";
@@ -184,11 +185,15 @@ test("Codex BYOK injects a session model provider without writing the key into C
   );
   assert.equal(plan.env.MODEL_PROVIDER, "codez-openrouter");
   // app-server 的登录判定读私有 CODEX_HOME 的 config.toml；只含 env_key 引用，不含密钥。
-  assert.equal(plan.files.length, 1);
-  assert.equal(plan.files[0]!.path, join(HOME, "codex", "config.toml"));
-  assert.match(plan.files[0]!.content, /model_provider = "codez-openrouter"/);
-  assert.match(plan.files[0]!.content, /env_key = "CODEZ_CODEX_PROVIDER_KEY"/);
-  assert.match(plan.files[0]!.content, /requires_openai_auth = false/);
+  // 旧版单模型 `model` 也按一项的模型列表写入目录（见下方 model_catalog_json 用例）。
+  assert.deepEqual(
+    plan.files.map((file) => file.path),
+    [join(HOME, "codex", CODEX_MODEL_CATALOG_FILE), join(HOME, "codex", "config.toml")],
+  );
+  const toml = plan.files[1]!.content;
+  assert.match(toml, /model_provider = "codez-openrouter"/);
+  assert.match(toml, /env_key = "CODEZ_CODEX_PROVIDER_KEY"/);
+  assert.match(toml, /requires_openai_auth = false/);
   assert.equal(plan.env.CODEX_HOME, join(HOME, "codex"));
   assert.equal(plan.env.CODEX_PATH, "/managed/codex");
   assert.equal(plan.env.OPENAI_API_KEY, undefined);
@@ -273,7 +278,8 @@ test("Pi custom endpoint writes models.json with an env reference, never the key
     baseUrl: "http://127.0.0.1:9999",
     api: "anthropic-messages",
     apiKey: `$${PI_PROVIDER_KEY_ENV}`,
-    models: [{ id: "replay" }],
+    // 默认按推理模型写入，只提供 low/medium/high（minimal 标记为不支持）。
+    models: [{ id: "replay", reasoning: true, thinkingLevelMap: { minimal: null } }],
   });
   assert.deepEqual(plan.args, ["--provider", "codez", "--model", "replay"]);
 });
@@ -340,4 +346,151 @@ test("subscription mode also strips CLAUDE_CODE_API_BASE_URL from config env", (
     configHome: HOME,
   });
   assert.equal(plan.env.CLAUDE_CODE_API_BASE_URL, undefined);
+});
+
+const MODELS = [
+  { id: "deepseek/deepseek-v4.1-flash" },
+  {
+    id: "xiaomi/mimo-v2.6-flash",
+    name: "MiMo",
+    reasoningLevels: ["low", "high", "max"] as Array<"low" | "high" | "max">,
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+    vision: true,
+  },
+  { id: "qwen/qwen3-coder", reasoning: false, enabled: false },
+];
+
+test("Claude maps configured models to its model slots", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "claude-code",
+      auth: "byok",
+      provider: { preset: "openrouter", models: MODELS },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assert.equal(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL, "deepseek/deepseek-v4.1-flash");
+  assert.equal(plan.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME, "deepseek/deepseek-v4.1-flash");
+  assert.equal(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL, "xiaomi/mimo-v2.6-flash");
+  assert.equal(plan.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME, "MiMo");
+  assert.equal(plan.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, "qwen/qwen3-coder");
+  // 能力变量不影响 2.1.280 对网关模型的请求形态，不写入，避免误导。
+  assert.ok(!Object.keys(plan.env).some((name) => name.endsWith("_SUPPORTED_CAPABILITIES")));
+  assert.equal(plan.env.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
+  assert.equal(plan.env.ANTHROPIC_CUSTOM_MODEL_OPTION, undefined);
+  // 后台小任务仍走首个模型（未设 smallModel 时）。
+  assert.equal(plan.env.ANTHROPIC_SMALL_FAST_MODEL, "deepseek/deepseek-v4.1-flash");
+
+  const single = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "claude-code",
+      auth: "byok",
+      provider: { preset: "openrouter", models: [{ id: "only/model" }] },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  // 未占用的 sonnet/haiku 槽指向首个模型，别名不会落到网关不认识的 Claude 官方模型名。
+  assert.equal(single.env.ANTHROPIC_DEFAULT_SONNET_MODEL, "only/model");
+  assert.equal(single.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, "only/model");
+  assert.equal(single.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME, undefined);
+});
+
+test("Codex BYOK writes a model catalog of exactly the configured models", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "codex",
+      auth: "byok",
+      provider: { preset: "openrouter", models: MODELS },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assertSecretOnlyInEnv(plan, CODEX_PROVIDER_KEY_ENV);
+  const catalogPath = join(HOME, "codex", CODEX_MODEL_CATALOG_FILE);
+  const toml = plan.files.find((file) => file.path.endsWith("config.toml"))!.content;
+  assert.match(toml, new RegExp(`model_catalog_json = ${JSON.stringify(catalogPath)}`));
+  // 默认模型是第一个启用的模型；禁用的模型仍在目录中，保证其选项 ID 稳定。
+  assert.match(toml, /^model = "deepseek\/deepseek-v4.1-flash"$/m);
+  const catalog = JSON.parse(plan.files.find((file) => file.path === catalogPath)!.content) as {
+    models: Array<Record<string, unknown>>;
+  };
+  assert.deepEqual(
+    catalog.models.map((model) => model.slug),
+    MODELS.map((model) => model.id),
+  );
+  const [first, second, third] = catalog.models;
+  assert.deepEqual(
+    (first!.supported_reasoning_levels as Array<{ effort: string }>).map((level) => level.effort),
+    ["low", "medium", "high"],
+  );
+  assert.equal(first!.default_reasoning_level, "medium");
+  assert.equal(first!.visibility, "list");
+  assert.equal(first!.context_window, 272_000);
+  assert.deepEqual(first!.input_modalities, ["text", "image"]);
+  assert.match(
+    String(first!.base_instructions),
+    /^You are a coding agent running in the Codex CLI/,
+  );
+  assert.equal(second!.display_name, "MiMo");
+  assert.deepEqual(
+    (second!.supported_reasoning_levels as Array<{ effort: string }>).map((level) => level.effort),
+    ["low", "high", "max"],
+  );
+  assert.equal(second!.default_reasoning_level, "low");
+  assert.equal(second!.context_window, 262_144);
+  assert.deepEqual(third!.supported_reasoning_levels, []);
+  assert.equal(third!.default_reasoning_level, undefined);
+
+  const subscription = buildBuiltinLaunchEnv({
+    config: config({ runtime: "codex", auth: "subscription", provider: { models: MODELS } }),
+    hostEnv: HOST_ENV,
+    apiKey: null,
+    configHome: HOME,
+  });
+  // 订阅配置保持 Codex 原生目录。
+  assert.ok(!subscription.files.some((file) => file.path.endsWith(CODEX_MODEL_CATALOG_FILE)));
+  assert.doesNotMatch(subscription.files[0]!.content, /model_catalog_json/);
+});
+
+test("Pi models.json lists every configured model with reasoning on by default and honours overrides", () => {
+  const plan = buildBuiltinLaunchEnv({
+    config: config({
+      runtime: "pi",
+      auth: "byok",
+      provider: { preset: "openrouter", models: MODELS },
+    }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  const models = JSON.parse(plan.files[0]!.content) as {
+    providers: { codez: { models: Array<Record<string, unknown>> } };
+  };
+  assert.deepEqual(models.providers.codez.models, [
+    { id: "deepseek/deepseek-v4.1-flash", reasoning: true, thinkingLevelMap: { minimal: null } },
+    {
+      id: "xiaomi/mimo-v2.6-flash",
+      name: "MiMo",
+      reasoning: true,
+      thinkingLevelMap: { minimal: null, medium: null, max: "max" },
+      input: ["text", "image"],
+      contextWindow: 262_144,
+      maxTokens: 32_000,
+    },
+    { id: "qwen/qwen3-coder", reasoning: false },
+  ]);
+  assert.deepEqual(plan.args, ["--provider", "codez", "--model", "deepseek/deepseek-v4.1-flash"]);
+  const empty = buildBuiltinLaunchEnv({
+    config: config({ runtime: "pi", auth: "byok", provider: { preset: "openrouter", models: [] } }),
+    hostEnv: HOST_ENV,
+    apiKey: SECRET,
+    configHome: HOME,
+  });
+  assert.equal(empty.problem, "A model is required for a custom Pi endpoint");
 });

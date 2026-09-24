@@ -141,6 +141,24 @@ export {
   type AgentRuntimeConfigPreview,
   ZCODE_AGENT_RUNTIME_UNAVAILABLE_CODE,
 } from "./zcode-agent/zcodeAgent.js";
+export type {
+  BuiltinRuntimeAuthChange,
+  BuiltinRuntimeAuthResult,
+  SaveBuiltinRuntimeConfigInput,
+} from "./agent-runtime/builtin/builtinRuntimeService.js";
+export type {
+  BuiltinProviderPresetView,
+  BuiltinRuntimeCatalogEntry,
+  BuiltinRuntimeCatalogView,
+  PiEndpointApi,
+} from "./agent-runtime/builtin/builtinRuntimeCatalogView.js";
+export type { AgentAuthMode } from "./agent-runtime/builtin/builtinRuntimeCatalog.js";
+export type {
+  AgentModelSettings,
+  AgentProviderSettings,
+  ReasoningLevel,
+} from "./agent-runtime/builtin/builtinProviderPresets.js";
+export type { ModelFieldSupport } from "./agent-runtime/builtin/builtinModels.js";
 export {
   isZCodeAgentMcpStatusModeUnsupportedError,
   ZCODE_AGENT_MCP_STATUS_MODE_UNSUPPORTED_ERROR_CODE,

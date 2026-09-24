@@ -11,8 +11,11 @@ import {
   type BuiltinAcpRuntime,
 } from "#src/agent-runtime/builtin/builtinRuntimeCatalog.js";
 import {
+  REASONING_LEVELS,
   findProviderPreset,
+  type AgentModelSettings,
   type AgentProviderSettings,
+  type ReasoningLevel,
 } from "#src/agent-runtime/builtin/builtinProviderPresets.js";
 
 export interface AgentConfig {
@@ -23,6 +26,8 @@ export interface AgentConfig {
   provider?: AgentProviderSettings;
   /** 非秘密的附加变量；含 KEY/TOKEN/SECRET/PASSWORD 的名字必须改用加密的 apiKey。 */
   env?: Record<string, string>;
+  /** false 时不在输入框模型选择器中提供该配置；缺省为 true。 */
+  enabled?: boolean;
   /** 是否来自默认内置条目（未落盘）。 */
   builtinDefault?: boolean;
 }
@@ -43,6 +48,11 @@ const DEFAULT_CONFIGS: readonly AgentConfig[] = [
   { id: "codex", name: "Codex", runtime: "codex", auth: "subscription" },
   { id: "pi", name: "Pi", runtime: "pi", auth: "byok", provider: { preset: "openrouter" } },
 ].map((config) => ({ ...config, builtinDefault: true }) as AgentConfig);
+
+/** 未落盘也存在的默认配置 ID；设置页据此区分“删除”与“恢复默认”。 */
+export const DEFAULT_AGENT_CONFIG_IDS: readonly string[] = DEFAULT_CONFIGS.map(
+  (config) => config.id,
+);
 
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 // 只拦截形如密钥的名字；MAX_THINKING_TOKENS、CLAUDE_CODE_MAX_OUTPUT_TOKENS 等普通变量放行。
@@ -117,7 +127,7 @@ export function parseAgentConfig(id: string, value: unknown): AgentConfig | stri
   if (!agentRuntimeIdSchema.safeParse(id).success || RESERVED_AGENT_IDS.has(id))
     return "Invalid or reserved Agent ID";
   if (!isRecord(value)) return "Expected an object";
-  const allowed = ["name", "runtime", "auth", "provider", "env"];
+  const allowed = ["name", "runtime", "auth", "provider", "env", "enabled"];
   if (Object.keys(value).some((key) => !allowed.includes(key))) return "Unknown configuration key";
   if (typeof value.name !== "string" || !value.name.trim()) return "Expected a name";
   if (typeof value.runtime !== "string" || !isBuiltinAcpRuntime(value.runtime))
@@ -131,6 +141,8 @@ export function parseAgentConfig(id: string, value: unknown): AgentConfig | stri
   if (typeof provider === "string") return provider;
   const env = value.env === undefined ? undefined : parseEnv(value.env);
   if (typeof env === "string") return env;
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean")
+    return "enabled must be a boolean";
   return {
     id,
     name: value.name.trim(),
@@ -138,6 +150,7 @@ export function parseAgentConfig(id: string, value: unknown): AgentConfig | stri
     auth: value.auth as AgentAuthMode,
     ...(provider ? { provider } : {}),
     ...(env ? { env } : {}),
+    ...(value.enabled === false ? { enabled: false } : {}),
   };
 }
 
@@ -146,7 +159,7 @@ function parseProvider(runtime: BuiltinAcpRuntime, value: unknown): AgentProvide
   const strings = ["preset", "baseUrl", "model", "smallModel", "providerId"] as const;
   const result: AgentProviderSettings = {};
   for (const key of Object.keys(value)) {
-    if (![...strings, "wireApi", "api", "timeoutMs"].includes(key))
+    if (![...strings, "wireApi", "api", "timeoutMs", "models"].includes(key))
       return `Unknown provider key ${key}`;
   }
   for (const key of strings) {
@@ -182,7 +195,86 @@ function parseProvider(runtime: BuiltinAcpRuntime, value: unknown): AgentProvide
       return "provider.timeoutMs must be a positive integer";
     result.timeoutMs = value.timeoutMs;
   }
+  if (value.models !== undefined) {
+    const models = parseModels(runtime, value.models);
+    if (typeof models === "string") return models;
+    result.models = models;
+  }
   return result;
+}
+
+const MODEL_KEYS = [
+  "id",
+  "name",
+  "enabled",
+  "reasoning",
+  "reasoningLevels",
+  "contextWindow",
+  "maxTokens",
+  "vision",
+  "slot",
+];
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+/** 用户声明的模型列表：ID 唯一，数量受 Runtime 能原生列出的上限约束。 */
+function parseModels(runtime: BuiltinAcpRuntime, value: unknown): AgentModelSettings[] | string {
+  if (!Array.isArray(value)) return "provider.models must be an array";
+  const limit = BUILTIN_RUNTIME_DEFINITIONS[runtime].maxConfiguredModels;
+  if (value.length > limit) return `${runtime} supports at most ${limit} models per configuration`;
+  const seen = new Set<string>();
+  const models: AgentModelSettings[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) return "provider.models entries must be objects";
+    if (Object.keys(entry).some((key) => !MODEL_KEYS.includes(key)))
+      return "Unknown provider.models key";
+    if (typeof entry.id !== "string" || !entry.id.trim() || /\s/.test(entry.id.trim()))
+      return "provider.models[].id must be a model ID without spaces";
+    const id = entry.id.trim();
+    if (seen.has(id)) return `Duplicate model ${id}`;
+    seen.add(id);
+    const model: AgentModelSettings = { id };
+    if (entry.name !== undefined) {
+      if (typeof entry.name !== "string") return "provider.models[].name must be a string";
+      if (entry.name.trim() && entry.name.trim() !== id) model.name = entry.name.trim();
+    }
+    for (const key of ["enabled", "reasoning", "vision"] as const) {
+      if (entry[key] === undefined) continue;
+      if (typeof entry[key] !== "boolean") return `provider.models[].${key} must be a boolean`;
+      model[key] = entry[key];
+    }
+    for (const key of ["contextWindow", "maxTokens"] as const) {
+      if (entry[key] === undefined) continue;
+      if (!isPositiveInteger(entry[key]))
+        return `provider.models[].${key} must be a positive integer`;
+      model[key] = entry[key];
+    }
+    if (entry.slot !== undefined) {
+      const slot = entry.slot;
+      if (runtime !== "claude-code" || typeof slot !== "number" || !Number.isInteger(slot))
+        return "provider.models[].slot is only valid for Claude Code";
+      if (slot < 0 || slot >= limit || models.some((model) => model.slot === slot))
+        return "provider.models[].slot must be a unique Claude model slot";
+      model.slot = slot;
+    }
+    if (entry.reasoningLevels !== undefined) {
+      const levels = entry.reasoningLevels;
+      if (
+        !Array.isArray(levels) ||
+        levels.some((level) => !(REASONING_LEVELS as readonly unknown[]).includes(level)) ||
+        new Set(levels).size !== levels.length
+      )
+        return `provider.models[].reasoningLevels must be unique values of ${REASONING_LEVELS.join(", ")}`;
+      // 按固定顺序保存，便于比较与生成各 Runtime 的档位列表。
+      model.reasoningLevels = REASONING_LEVELS.filter((level) =>
+        (levels as ReasoningLevel[]).includes(level),
+      );
+    }
+    models.push(model);
+  }
+  return models;
 }
 
 function parseEnv(value: unknown): Record<string, string> | string {
@@ -205,6 +297,7 @@ export interface AgentConfigInput {
   auth: string;
   provider?: AgentProviderSettings;
   env?: Record<string, string>;
+  enabled?: boolean;
 }
 
 /** 只改指定 ID；格式错误的现有文件拒绝覆盖。 */
@@ -251,6 +344,7 @@ function serialize(config: AgentConfig): Record<string, unknown> {
     auth: config.auth,
     ...(config.provider ? { provider: config.provider } : {}),
     ...(config.env ? { env: config.env } : {}),
+    ...(config.enabled === false ? { enabled: false } : {}),
   };
 }
 
