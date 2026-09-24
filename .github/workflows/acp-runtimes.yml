@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: acp-runtimes-${{ github.ref }}
-  cancel-in-progress: true
+  # Live runs are paid: queue new runs behind a running one instead of cancelling it.
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: "24.14.0"
