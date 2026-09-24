@@ -101,12 +101,11 @@ jobs:
         id: live
         working-directory: packages/services
         run: |
-          mkdir -p "$RUNNER_TEMP/live-home"
-          HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$HOME/.cache/codez-acp-runtimes" \
+          CACHE="$HOME/.cache/codez-acp-runtimes"
+          mkdir -p "$RUNNER_TEMP/live-home" "$GITHUB_WORKSPACE/artifacts/live"
+          HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$CACHE" \
             CODEZ_E2E_ARTIFACTS="$GITHUB_WORKSPACE/artifacts/live" \
-            node --import tsx --test --test-reporter=spec --test-reporter-destination=stdout \
-              --test-reporter=junit --test-reporter-destination="$GITHUB_WORKSPACE/artifacts/live-junit.xml" \
-              test/e2e/builtinRuntimesLive.e2e.ts
+            node --import tsx --test test/e2e/builtinRuntimesLive.e2e.ts
       - name: OpenRouter usage after
         if: always()
         id: after
