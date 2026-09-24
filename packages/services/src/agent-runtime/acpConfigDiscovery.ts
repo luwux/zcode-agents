@@ -6,6 +6,8 @@ import {
   isolateAcpNativeAutoMemory,
   type AcpRuntimeSpec,
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
+import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
 
 /** 草稿会话使用临时 ACP 进程读取模型与思考选项，不留下空会话绑定。 */
 export async function discoverAcpRuntimeConfig(input: {
@@ -13,21 +15,36 @@ export async function discoverAcpRuntimeConfig(input: {
   workspacePath: string;
   modelId?: string;
   includeAllModelThoughtLevels?: boolean;
-  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<{ executable: string; args: readonly string[] }>;
+  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<AcpLaunch>;
+  onInitialized?: (connection: AcpConnection) => void;
 }): Promise<AgentRuntimeConfigPreview> {
   const spec = await resolveAcpRuntimeSpec(input.runtimeId);
   if (!spec) throw new Error(`Unsupported ACP Runtime ${input.runtimeId}`);
-  const { executable, args } = await input.resolveLaunch(spec);
-  const isolated = isolateAcpNativeAutoMemory(spec, process.env, args);
-  const connection = await AcpConnection.open(
-    { executable, args: isolated.args, cwd: input.workspacePath, env: isolated.env },
-    {
-      onUpdate: () => {},
-      requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-    },
-  );
+  const launch = await input.resolveLaunch(spec);
+  const isolated = isolateAcpNativeAutoMemory(spec, launch.env ?? process.env, launch.args);
+  const connection = await acpStartupGate.run(async () => {
+    const opened = await AcpConnection.open(
+      {
+        executable: launch.executable,
+        args: isolated.args,
+        cwd: input.workspacePath,
+        env: isolated.env,
+      },
+      {
+        onUpdate: () => {},
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      },
+    );
+    input.onInitialized?.(opened);
+    try {
+      await opened.createSession(input.workspacePath);
+      return opened;
+    } catch (error) {
+      await opened.close();
+      throw error;
+    }
+  });
   try {
-    await connection.createSession(input.workspacePath);
     if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID)
       await connection.setModel(input.modelId);
     const models = connection.modelOptions();

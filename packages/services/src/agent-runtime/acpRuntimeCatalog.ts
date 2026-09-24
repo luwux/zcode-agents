@@ -7,6 +7,15 @@ import {
   fingerprintAcpServer,
   readAgentServersRegistry,
 } from "#src/agent-runtime/agentServersRegistry.js";
+import {
+  findAgentConfig,
+  type AgentConfig,
+} from "#src/agent-runtime/builtin/agentConfigRegistry.js";
+import {
+  builtinConfigFingerprint,
+  resolveBuiltinLaunch,
+  type AcpLaunch,
+} from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
 
 const WORKBUDDY_APP_PATH = "/Applications/WorkBuddy.app";
 const WORKBUDDY_EXECUTABLE = join(
@@ -19,10 +28,12 @@ export interface AcpRuntimeSpec {
   name: string;
   command: string;
   args: readonly string[];
-  distribution: "npm" | "embedded-app" | "configured";
+  distribution: "npm" | "embedded-app" | "configured" | "builtin";
   packageName?: string;
   macOnly?: boolean;
   fingerprint?: string;
+  /** 内置 Runtime 配置（非秘密）；启动时再解析安装目录、env 与密钥。 */
+  builtin?: AgentConfig;
 }
 
 /** 仅供迁移前旧会话恢复；新建与供应商列表只读取 Host 配置注册表。 */
@@ -74,6 +85,17 @@ export async function resolveAcpRuntimeSpec(
     const legacy = getLegacyAcpRuntimeSpec(id);
     if (legacy) return legacy;
   }
+  const builtin = await findAgentConfig(id);
+  if (builtin)
+    return {
+      id: builtin.id,
+      name: builtin.name,
+      command: process.execPath,
+      args: [],
+      distribution: "builtin",
+      fingerprint: builtinConfigFingerprint(builtin),
+      builtin,
+    };
   const registry = await readAgentServersRegistry();
   const configured = registry.servers.find((item) => item.id === id);
   return configured
@@ -120,6 +142,18 @@ async function resolveWorkBuddyCommand(): Promise<string> {
   await access(WORKBUDDY_EXECUTABLE, constants.X_OK);
   return realpath(WORKBUDDY_EXECUTABLE);
 }
+/** 内置 Runtime 返回受管安装与隔离 env；其他 Runtime 沿用 Host env 与可执行文件解析。 */
+export async function resolveAcpRuntimeLaunch(spec: AcpRuntimeSpec): Promise<AcpLaunch> {
+  if (spec.distribution === "builtin") {
+    if (!spec.builtin) throw new Error(`Built-in ACP configuration is missing: ${spec.id}`);
+    const current = await findAgentConfig(spec.id);
+    if (!current || builtinConfigFingerprint(current) !== spec.fingerprint)
+      throw new Error(`ACP Agent configuration changed or is unavailable: ${spec.id}`);
+    return resolveBuiltinLaunch(current);
+  }
+  return { executable: await resolveAcpRuntimeCommand(spec), args: spec.args };
+}
+
 /** 列表曾因每次深度验签延迟显示；WorkBuddy 固定路径只核对可执行权限。 */
 export async function resolveAcpRuntimeCommand(
   spec: AcpRuntimeSpec,
@@ -133,6 +167,7 @@ export async function resolveAcpRuntimeCommand(
     return current.command;
   }
   if (spec.distribution === "embedded-app") return resolveWorkBuddyCommand();
+  if (spec.distribution === "builtin") return process.execPath;
   if (spec.macOnly && process.platform !== "darwin")
     throw new Error(`${spec.name} is only supported on macOS`);
   const pathEntries = (env.PATH ?? "").split(delimiter).filter(Boolean);

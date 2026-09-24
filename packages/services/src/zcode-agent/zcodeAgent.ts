@@ -1,3 +1,5 @@
+import type { BuiltinRuntimeStatus } from "../agent-runtime/builtin/builtinRuntimeStatus.js";
+import type { AgentConfigInput } from "../agent-runtime/builtin/agentConfigRegistry.js";
 import type {
   AgentRuntimeId,
   BackgroundBashOutputResult,
@@ -580,6 +582,8 @@ export interface AgentRuntimeInstallStatus {
   installHint?: string;
   reason?: string;
   configPath?: string;
+  /** 内置 Runtime（Claude Code / Codex / Pi）的受管安装、认证与 Provider 摘要；不含秘密。 */
+  builtin?: BuiltinRuntimeStatus["builtin"];
   models?: Array<{
     id: string;
     name: string;
@@ -618,6 +622,22 @@ export interface IZCodeAgentService {
     args: string[];
   }): Promise<AgentRuntimeInstallStatus[]>;
   deleteAgentServer(id: string): Promise<AgentRuntimeInstallStatus[]>;
+  /** 保存内置 Runtime 配置；`apiKey` 仅写入加密凭据库，null 删除，undefined 保持不变。 */
+  saveAgentRuntimeConfig(
+    input: AgentConfigInput & { apiKey?: string | null },
+  ): Promise<AgentRuntimeInstallStatus[]>;
+  deleteAgentRuntimeConfig(id: string): Promise<AgentRuntimeInstallStatus[]>;
+  /** 订阅登录：返回登录 URL/设备码提示；完成状态经 listAgentRuntimes 的 builtin.authState 呈现。 */
+  loginAgentRuntime(
+    params: ZCodeAgentWorkspaceTarget & {
+      runtimeId: AgentRuntimeId;
+      methodId?: string;
+      deviceAuth?: boolean;
+    },
+  ): Promise<{ state: string; message?: string }>;
+  logoutAgentRuntime(
+    params: ZCodeAgentWorkspaceTarget & { runtimeId: AgentRuntimeId },
+  ): Promise<{ state: string; message?: string }>;
   saveAgentServerModels(
     input: ZCodeAgentWorkspaceTarget & {
       runtimeId: AgentRuntimeId;

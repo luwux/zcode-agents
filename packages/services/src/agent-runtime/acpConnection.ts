@@ -182,9 +182,14 @@ export class AcpConnection {
       const initializeResponse = await withTimeout(
         connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
+          // auth.terminal：订阅登录由 Host 以相同 argv/env 另起 CLI 登录进程完成（ACP terminal auth）。
           clientCapabilities: config.textOnly
             ? {}
-            : { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+            : {
+                fs: { readTextFile: true, writeTextFile: true },
+                terminal: true,
+                auth: { terminal: true },
+              },
           clientInfo: { name: "CodeZ", version: "1" },
         }),
         HANDSHAKE_TIMEOUT_MS,
@@ -203,6 +208,19 @@ export class AcpConnection {
       await terminateProcessTreeAndWait(child, { ownedProcessGroupId: child.pid });
       throw error;
     }
+  }
+
+  /** 调用 Agent 公布的非终端认证方法（例如 Codex 的 chat-gpt）；终端方法由调用方另起进程。 */
+  async authenticate(methodId: string): Promise<void> {
+    if (this.closed) throw new Error("ACP process is closed");
+    const method = this.initializeResponse.authMethods?.find(
+      (candidate) => candidate.id === methodId,
+    );
+    if (!method)
+      throw new Error(`ACP Agent does not advertise auth method ${JSON.stringify(methodId)}`);
+    if ("type" in method && method.type === "terminal")
+      throw new Error("Terminal auth methods must be run as a separate login process");
+    await this.connection.authenticate({ methodId });
   }
 
   get sessionId(): string | null {

@@ -12,6 +12,8 @@ import {
   type AcpRuntimeSpec,
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import { AcpTranscriptStore } from "#src/agent-runtime/acpTranscriptStore.js";
+import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
 
 /** 建立 ACP 原生会话、持久绑定和工作台投影；失败时回收进程。 */
 export async function createAcpManagedSession(input: {
@@ -26,8 +28,10 @@ export async function createAcpManagedSession(input: {
   projectWorkspacePath?: string;
   parentTaskId?: string;
   spec: AcpRuntimeSpec;
-  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<{ executable: string; args: readonly string[] }>;
+  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<AcpLaunch>;
   isMemoryEnabled: () => boolean | Promise<boolean>;
+  /** 握手完成后回调（记录 authMethods）；在 session/new 之前触发，失败时仍可用于认证提示。 */
+  onInitialized?: (connection: AcpConnection) => void;
   syncTaskMetaAtGroupedTop: (meta: ZCodeTaskMeta) => Promise<void>;
   makeObserver: (
     projection: AcpConversationProjection,
@@ -45,20 +49,32 @@ export async function createAcpManagedSession(input: {
   const pendingPermissions = new Map<string, PendingPermission>();
   let managed: ManagedAcpSession | null = null;
   const observer = input.makeObserver(projection, transcript, pendingPermissions, () => managed);
-  const { executable, args } = await input.resolveLaunch(input.spec);
-  const isolated = isolateAcpNativeAutoMemory(input.spec, process.env, args);
-  const connection = await AcpConnection.open(
-    {
-      executable,
-      args: isolated.args,
-      cwd: input.workspacePath,
-      env: isolated.env,
-      memory: { workspaceIdentity: input.workspaceIdentity, isEnabled: input.isMemoryEnabled },
-    },
-    observer,
-  );
+  const launch = await input.resolveLaunch(input.spec);
+  const isolated = isolateAcpNativeAutoMemory(input.spec, launch.env ?? process.env, launch.args);
+  // 闸门覆盖 spawn → initialize → session/new；模型/模式设置在已建立的会话上，不占名额。
+  const { connection, nativeSessionId } = await acpStartupGate.run(async () => {
+    const opened = await AcpConnection.open(
+      {
+        executable: launch.executable,
+        args: isolated.args,
+        cwd: input.workspacePath,
+        env: isolated.env,
+        memory: { workspaceIdentity: input.workspaceIdentity, isEnabled: input.isMemoryEnabled },
+      },
+      observer,
+    );
+    input.onInitialized?.(opened);
+    try {
+      return {
+        connection: opened,
+        nativeSessionId: await opened.createSession(input.workspacePath),
+      };
+    } catch (error) {
+      await opened.close();
+      throw error;
+    }
+  });
   try {
-    const nativeSessionId = await connection.createSession(input.workspacePath);
     if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID)
       await connection.setModel(input.modelId);
     if (input.thoughtLevel) await connection.setThinkingLevel(input.thoughtLevel);

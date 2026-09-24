@@ -318,6 +318,14 @@ import {
 import type { PipSessionEvent } from "@zcode/zcode-cua/pip-session";
 import { registerMemoryDiagnosticsProvider } from "#src/memoryDiagnostics.js";
 import { AcpV4Bridge } from "#src/agent-runtime/acpV4Bridge.js";
+import { listBuiltinRuntimeStatuses } from "#src/agent-runtime/builtin/builtinRuntimeStatus.js";
+import {
+  assertAgentServerIdAvailable,
+  deleteBuiltinRuntimeConfig,
+  loginBuiltinRuntime,
+  logoutBuiltinRuntimeConfig,
+  saveBuiltinRuntimeConfig,
+} from "#src/agent-runtime/builtin/builtinRuntimeService.js";
 import { acpSpecIdentity, resolveAcpRuntimeSpec } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import { readAcpModelCatalog, saveAcpModels } from "#src/agent-runtime/acpProviderModels.js";
 import {
@@ -3351,6 +3359,7 @@ export function createZCodeAgentService(
   return {
     async listAgentRuntimes() {
       const registry = await readAgentServersRegistry();
+      const builtins = await listBuiltinRuntimeStatuses();
       const statuses = [
         {
           id: "zcode-cli" as const,
@@ -3359,6 +3368,15 @@ export function createZCodeAgentService(
           command: "built-in",
           configPath: registry.path,
         },
+        ...builtins.statuses.map(({ fingerprint: _fingerprint, ...status }) => status),
+        ...builtins.issues.map((issue) => ({
+          id: issue.id,
+          name: issue.id,
+          installed: false,
+          command: "",
+          reason: issue.message,
+          configPath: issue.configPath,
+        })),
         ...registry.servers.map((server) => ({
           id: server.id,
           name: server.name,
@@ -3400,12 +3418,27 @@ export function createZCodeAgentService(
       );
     },
     async saveAgentServer(input) {
+      await assertAgentServerIdAvailable(input.id);
       await saveAgentServerConfig(input);
       return this.listAgentRuntimes();
     },
     async deleteAgentServer(id) {
       await deleteAgentServerConfig(id);
       return this.listAgentRuntimes();
+    },
+    async saveAgentRuntimeConfig(input) {
+      await saveBuiltinRuntimeConfig(input);
+      return this.listAgentRuntimes();
+    },
+    async deleteAgentRuntimeConfig(id) {
+      await deleteBuiltinRuntimeConfig(id);
+      return this.listAgentRuntimes();
+    },
+    async loginAgentRuntime(params) {
+      return loginBuiltinRuntime(params);
+    },
+    async logoutAgentRuntime(params) {
+      return logoutBuiltinRuntimeConfig(params);
     },
     async saveAgentServerModels(input) {
       const spec = await resolveAcpRuntimeSpec(input.runtimeId);

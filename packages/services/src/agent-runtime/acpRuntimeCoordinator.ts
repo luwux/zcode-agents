@@ -32,9 +32,17 @@ import {
 import {
   resolveAcpRuntimeSpec,
   isolateAcpNativeAutoMemory,
-  resolveAcpRuntimeCommand,
+  resolveAcpRuntimeLaunch,
   type AcpRuntimeSpec,
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
+import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
+import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import {
+  acpAuthStateStore,
+  isAcpAuthRequiredError,
+  summarizeAuthMethods,
+  type AcpAuthStateStore,
+} from "#src/agent-runtime/acpAuthState.js";
 
 export interface AcpWorkspaceTarget {
   workspacePath: string;
@@ -63,12 +71,30 @@ export class AcpRuntimeCoordinator {
     private readonly events: AcpRuntimeCoordinatorEvents = {},
     private readonly resolveLaunch: (
       spec: AcpRuntimeSpec,
-    ) => Promise<{ executable: string; args: readonly string[] }> = async (spec) => ({
-      executable: await resolveAcpRuntimeCommand(spec),
-      args: spec.args,
-    }),
+    ) => Promise<AcpLaunch> = resolveAcpRuntimeLaunch,
     private readonly isMemoryEnabled: () => boolean | Promise<boolean> = () => false,
+    private readonly authStates: AcpAuthStateStore = acpAuthStateStore,
   ) {}
+
+  /** 握手后记录 Agent 公布的认证方法，供登录入口选择；不代表已认证。 */
+  private recordAuthMethods(runtimeId: string, connection: AcpConnection): void {
+    this.authStates.recordMethods(
+      runtimeId,
+      summarizeAuthMethods(connection.initializeResponse.authMethods),
+    );
+  }
+
+  /**
+   * authRequired 只翻转该配置的认证状态并返回明确错误；不重试、不切换 Runtime、不回退到 BYOK。
+   * 其他错误原样返回。
+   */
+  private authFailure(runtimeId: string, error: unknown): Error {
+    if (!isAcpAuthRequiredError(error))
+      return error instanceof Error ? error : new Error(String(error));
+    const message = "Sign-in required: authenticate this ACP provider, then retry";
+    this.authStates.markAuthRequired(runtimeId, message);
+    return new Error(message);
+  }
 
   async discoverConfig(
     input: AcpWorkspaceTarget & {
@@ -77,7 +103,15 @@ export class AcpRuntimeCoordinator {
       includeAllModelThoughtLevels?: boolean;
     },
   ): Promise<AgentRuntimeConfigPreview> {
-    return discoverAcpRuntimeConfig({ ...input, resolveLaunch: this.resolveLaunch });
+    try {
+      return await discoverAcpRuntimeConfig({
+        ...input,
+        resolveLaunch: this.resolveLaunch,
+        onInitialized: (connection) => this.recordAuthMethods(input.runtimeId, connection),
+      });
+    } catch (error) {
+      throw this.authFailure(input.runtimeId, error);
+    }
   }
 
   async create(
@@ -131,6 +165,7 @@ export class AcpRuntimeCoordinator {
     const key = sessionKey(input, taskId);
     if (this.active.has(key)) throw new Error("ACP create is already in progress");
     const managed = await createAcpManagedSession({
+      onInitialized: (connection) => this.recordAuthMethods(input.runtimeId, connection),
       taskId,
       runtimeId: input.runtimeId,
       workspacePath: input.workspacePath,
@@ -151,6 +186,8 @@ export class AcpRuntimeCoordinator {
       },
       makeObserver: (projection, transcript, pending, current) =>
         this.makeObserver(input, taskId, projection, transcript, pending, current),
+    }).catch((error: unknown) => {
+      throw this.authFailure(input.runtimeId, error);
     });
     this.active.set(key, managed);
     this.publish(managed);
@@ -193,20 +230,33 @@ export class AcpRuntimeCoordinator {
         pendingPermissions,
         () => managed,
       );
-      const { executable, args } = await this.resolveLaunch(spec);
-      const isolated = isolateAcpNativeAutoMemory(spec, process.env, args);
-      const connection = await AcpConnection.open(
-        {
-          executable,
-          args: isolated.args,
-          cwd: target.workspacePath,
-          env: isolated.env,
-          memory: { workspaceIdentity: target.workspaceIdentity, isEnabled: this.isMemoryEnabled },
-        },
-        observer,
-      );
+      const launch = await this.resolveLaunch(spec);
+      const isolated = isolateAcpNativeAutoMemory(spec, launch.env ?? process.env, launch.args);
+      const nativeSessionId = meta.nativeSessionId;
+      const connection = await acpStartupGate.run(async () => {
+        const opened = await AcpConnection.open(
+          {
+            executable: launch.executable,
+            args: isolated.args,
+            cwd: target.workspacePath,
+            env: isolated.env,
+            memory: {
+              workspaceIdentity: target.workspaceIdentity,
+              isEnabled: this.isMemoryEnabled,
+            },
+          },
+          observer,
+        );
+        this.recordAuthMethods(spec.id, opened);
+        try {
+          await opened.loadSession(nativeSessionId, target.workspacePath);
+          return opened;
+        } catch (error) {
+          await opened.close();
+          throw this.authFailure(spec.id, error);
+        }
+      });
       try {
-        await connection.loadSession(meta.nativeSessionId, target.workspacePath);
         if (
           meta.model &&
           !connection.modelOptions().some((model) => model.id === meta.model && model.selected)
@@ -538,11 +588,16 @@ export class AcpRuntimeCoordinator {
   ): Promise<void> {
     try {
       const result = await managed.connection.prompt(commandId, content);
+      if (managed.meta.runtimeId && !managed.crashed)
+        this.authStates.markAuthenticated(managed.meta.runtimeId);
       await this.finishTurn(
         managed,
         managed.crashed ? { error: "ACP process exited; turn outcome is unknown" } : result,
       );
-    } catch (error) {
+    } catch (caught) {
+      const error = managed.meta.runtimeId
+        ? this.authFailure(managed.meta.runtimeId, caught)
+        : caught;
       const message = error instanceof Error ? error.message : String(error);
       await this.finishTurn(managed, {
         error: managed.crashed ? "ACP process exited; turn outcome is unknown" : message,
