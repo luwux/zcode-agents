@@ -15,4 +15,4 @@
 
 - [x] 3.1 Unit tests (`test/acpMidTurnSteering.test.ts`): steer + mid-turn effort, deferred model, fallback race, non-steering reject, restore, bridge.
 - [x] 3.2 Offline real-CLI replay (`acpComplexReplay.e2e.ts`, fixture `claude-code-steer.json`): the steer interrupts the stalled stream and the steered reply lands in the same turn.
-- [ ] 3.3 Live steering on all three runtimes through OpenRouter (website task steered after the first tool call; pending a green live run).
+- [x] 3.3 Live steering on all three runtimes through OpenRouter (website task steered after the first tool call; joined the running turn on all three in runs 14 and 17).

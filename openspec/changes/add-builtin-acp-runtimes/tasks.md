@@ -19,6 +19,6 @@
 
 - [x] 4.1 Unit tests with fake ACP agent (method selection, env stripping, state transitions, gate).
 - [x] 4.2 Replay proxy (Anthropic Messages + OpenAI Responses SSE), Pi fixture, offline e2e through the coordinator.
-- [ ] 4.3 Live OpenRouter smoke test in GitHub Actions.
+- [x] 4.3 Live OpenRouter tasks in GitHub Actions (website, harness and internet research per runtime; 14/14 in run 17).
 - [x] 4.4 CDP desktop e2e with real input (`scripts/acp-cdp`; replay: all runtimes pass locally and in CI, Pi has no permission prompt; live: CI job `desktop-cdp`).
 - [x] 4.5 typecheck, lint, architecture check.

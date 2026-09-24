@@ -278,9 +278,17 @@ export async function runCase(testCase, options) {
       );
       // 回放中无延迟的收尾轮（如 "Replay turn finished."）在首次轮询前就已完成，
       // 因此只要求至少一轮在运行中观察到 assistant 行；每轮时间点都记录在结果里。
+      // 实时模型的回复可能极短（如 "DONE"），整段在回合结束后才渲染；此时以运行中出现的工具卡片等
+      // 任意新行证明增量渲染。回放用例仍要求运行中出现 assistant 行。
       check(
-        turns.some((turn) => turn.firstAssistantMs !== null),
-        "assistant rows appeared while a turn was still running (streamed)",
+        turns.some(
+          (turn) =>
+            turn.firstAssistantMs !== null ||
+            (testCase.live && turn.newRows.some((row) => row.running)),
+        ),
+        testCase.live
+          ? "rows appeared while a turn was still running (streamed)"
+          : "assistant rows appeared while a turn was still running (streamed)",
         turns.map((turn) => turn.firstAssistantMs),
       );
       check(dom.alerts.length === 0, "no error alerts in the timeline", dom.alerts);
