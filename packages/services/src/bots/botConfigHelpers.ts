@@ -6,7 +6,10 @@ import {
   type BotProvider,
   type BotsConfigFile,
 } from "@zcode/shared";
-import { normalizeBotCommandPolicy, normalizeBotCurrentOptions } from "./config.js";
+import {
+  normalizeBotCommandPolicy,
+  normalizeBotCurrentOptions,
+} from "./config.js";
 import { normalizeAllowedWorkspaces } from "./workspaceHelpers.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,13 +39,12 @@ export function findCallbackBot(
   return config.bots.filter((bot) => bot.provider === provider && bot.enabled).at(0) ?? null;
 }
 
-export function findAuthorizedBot(config: BotsConfigFile, actor: BotActor): BotConfig | null {
+export function findAuthorizedBot(
+  config: BotsConfigFile,
+  actor: BotActor,
+): BotConfig | null {
   if (actor.provider === "weixin") {
-    return (
-      config.bots.find(
-        (bot) => bot.enabled && bot.provider === "weixin" && bot.id === actor.botId,
-      ) ?? null
-    );
+    return config.bots.find((bot) => bot.enabled && bot.provider === "weixin" && bot.id === actor.botId) ?? null;
   }
   return (
     config.bots.find(

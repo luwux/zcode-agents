@@ -66,14 +66,18 @@ export function resolveProviderModeIdFromConfigOptions(params: {
     return exactMatch.value;
   }
 
-  const requestedPersistedMode = normalizePersistedSessionMode(requestedMode, params.provider);
+  const requestedPersistedMode = normalizePersistedSessionMode(
+    requestedMode,
+    params.provider,
+  );
   if (!requestedPersistedMode) {
     return undefined;
   }
 
   const semanticMatch = candidates.find(
     (candidate) =>
-      normalizePersistedSessionMode(candidate.value, params.provider) === requestedPersistedMode,
+      normalizePersistedSessionMode(candidate.value, params.provider) ===
+      requestedPersistedMode,
   );
 
   return semanticMatch?.value;
