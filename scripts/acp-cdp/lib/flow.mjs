@@ -350,7 +350,12 @@ export async function runCase(testCase, options) {
           check(markerExists, `${testCase.marker} created after approval`);
         }
       }
-      if (testCase.live && !testCase.expectPermission && dom.toolCards.length === 0) {
+      if (
+        testCase.live &&
+        !testCase.expectPermission &&
+        !testCase.answerOnly &&
+        dom.toolCards.length === 0
+      ) {
         result.status = "inconclusive";
         result.reason =
           "live model answered without calling a tool; tool-card rendering unverified";

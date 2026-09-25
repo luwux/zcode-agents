@@ -241,6 +241,8 @@ export function buildCases({ mode, runtimes }) {
       addModelInUi: true,
       vision: true,
       pasteImageText: VISION_NUMBER,
+      // 看图作答不需要调用工具，不以“未出现工具卡片”判为 inconclusive。
+      answerOnly: true,
       prompts: ["What number is written in the attached image? Reply with only the number."],
       provider: () => ({ preset: "openrouter", model: VISION_MODEL }),
       mode: PERMISSION_MODE[runtime],
