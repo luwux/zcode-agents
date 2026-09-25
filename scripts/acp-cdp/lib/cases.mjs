@@ -54,6 +54,10 @@ async function verifyTools({ workspace, timeline }) {
   ];
 }
 
+// 图片用例需要能看图的模型；qwen3.7-flash 便宜且支持图片与工具调用。
+export const VISION_MODEL = process.env.CODEZ_CDP_VISION_MODEL ?? "qwen/qwen3.7-flash";
+const VISION_NUMBER = "4827";
+
 const BROWSER_SKIP =
   "Claude Code, Codex and Pi expose no browser tool in these configurations (Claude's WebFetch does not " +
   "render pages; CodeZ's browser-use belongs to its own agent), so there is no ACP browser action to drive";
@@ -180,6 +184,26 @@ export function buildCases({ mode, runtimes }) {
       expectPermission: false,
       setupWorkspace: setupToolsWorkspace,
       verify: verifyTools,
+    });
+    // 粘贴截图（内联图片 → 分片上传 → ACP image 块）并要求模型复述图中的数字。
+    cases.push({
+      id: `${runtime}--live-vision`,
+      runtime,
+      title: `${label} live pasted image (OpenRouter ${VISION_MODEL})`,
+      configId: `cdp-live-${runtime}-vision`,
+      configName: `CDP live ${label} vision`,
+      live: true,
+      addModelInUi: true,
+      vision: true,
+      pasteImageText: VISION_NUMBER,
+      prompts: ["What number is written in the attached image? Reply with only the number."],
+      provider: () => ({ preset: "openrouter", model: VISION_MODEL }),
+      mode: PERMISSION_MODE[runtime],
+      answerPermissions: true,
+      expectPermission: false,
+      verify: async ({ timeline }) => [
+        [timeline.includes(VISION_NUMBER), `vision: the answer contains ${VISION_NUMBER}`],
+      ],
     });
     cases.push({
       id: `${runtime}--live-browser`,

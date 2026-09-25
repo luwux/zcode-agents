@@ -53,7 +53,17 @@ const until = async (predicate, timeoutMs, label) => {
  */
 export async function configureRuntimeInSettings(
   { page, click, logAction, screenshot },
-  { configId, configName, addModel, apiKey, wanted, allowDefault, strict, timeoutMs },
+  {
+    configId,
+    configName,
+    addModel,
+    addModelVision,
+    apiKey,
+    wanted,
+    allowDefault,
+    strict,
+    timeoutMs,
+  },
 ) {
   await click(page.getByTestId("chat-model-select-trigger"), "model picker");
   await click(page.getByRole("menuitem", { name: "Manage models", exact: true }), "Manage models");
@@ -71,6 +81,11 @@ export async function configureRuntimeInSettings(
     await click(idInput, "model ID");
     logAction({ action: "type", target: "model ID", text: addModel });
     await page.keyboard.type(addModel, { delay: 5 });
+    if (addModelVision) {
+      // 图片输入要求模型声明 Vision；像用户一样勾选。
+      const vision = page.getByRole("dialog").getByRole("checkbox", { name: /vision/i });
+      if ((await vision.getAttribute("aria-checked")) !== "true") await click(vision, "Vision");
+    }
     await screenshot?.("settings-add-model-dialog");
     await click(
       page.getByRole("dialog").getByRole("button", { name: "Save", exact: true }),
@@ -236,4 +251,38 @@ export async function expandTurnHistories({ page, click }) {
     await click(collapsed.first(), "expand turn history");
     await sleep(300);
   }
+}
+
+/**
+ * 像用户粘贴截图一样把一张清晰的数字图片放进输入框：在渲染进程里用 canvas 画出数字，
+ * 以 ClipboardEvent("paste") 投递到编辑器，再等附件缩略图出现（上传完成后才可发送）。
+ */
+export async function pasteNumberImage({ page, click, logAction }, text) {
+  const input = page.getByTestId("v4-composer-input");
+  await click(input, "composer input");
+  logAction({ action: "paste", target: "composer input", text: `[image of ${text}]` });
+  await page.evaluate(async (digits) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 480;
+    canvas.height = 200;
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#000000";
+    context.font = "bold 140px sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(digits, canvas.width / 2, canvas.height / 2);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const file = new File([blob], "pasted-number.png", { type: "image/png" });
+    const data = new DataTransfer();
+    data.items.add(file);
+    const target = document.activeElement ?? document.body;
+    target.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  }, text);
+  await page.locator('img[src^="blob:"], img[src^="data:"]').first().waitFor({ timeout: 20_000 });
+  // 缩略图先于上传完成出现；给分片上传留出时间。
+  await page.waitForTimeout(3000);
 }

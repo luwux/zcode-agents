@@ -16,6 +16,7 @@ import {
 } from "./support.mjs";
 import { waitForTurn } from "./turn.mjs";
 import {
+  pasteNumberImage,
   configureRuntimeInSettings,
   dismissOnboarding,
   expandTurnHistories,
@@ -217,6 +218,7 @@ export async function runCase(testCase, options) {
           configId: testCase.configId,
           configName: testCase.configName,
           addModel: addModelInUi ? uiModel : null,
+          addModelVision: Boolean(testCase.vision),
           apiKey: configureInUi ? REPLAY_KEY : null,
           wanted: testCase.live ? options.liveModel : fixture.model,
           // Claude 的 Default 经 ANTHROPIC_DEFAULT_*_MODEL 指向配置的模型；Live 下其他 Runtime 必须公布该模型本身。
@@ -247,6 +249,7 @@ export async function runCase(testCase, options) {
         async () => {
           const { page, click } = ui();
           baseline = await page.evaluate(probeDom);
+          if (testCase.pasteImageText) await pasteNumberImage(ui(), testCase.pasteImageText);
           await click(page.getByTestId("v4-composer-input"), "composer input");
           app.logAction({ action: "type", target: "composer input", text: prompt });
           await page.keyboard.type(prompt, { delay: 5 });

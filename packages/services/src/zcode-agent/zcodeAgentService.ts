@@ -247,7 +247,9 @@ import {
   V4_METHODS,
   V4_NOTIFICATIONS,
   v4AttachmentAbortResultSchema,
+  v4AttachmentBeginParamsSchema,
   v4AttachmentBeginResultSchema,
+  v4AttachmentChunkParamsSchema,
   v4AttachmentChunkResultSchema,
   v4AttachmentCommitResultSchema,
   v4AttachmentPreviewSourceParamsSchema,
@@ -318,6 +320,7 @@ import {
 import type { PipSessionEvent } from "@zcode/zcode-cua/pip-session";
 import { registerMemoryDiagnosticsProvider } from "#src/memoryDiagnostics.js";
 import { AcpV4Bridge } from "#src/agent-runtime/acpV4Bridge.js";
+import { AcpAttachmentUploads } from "#src/agent-runtime/acpAttachmentUploads.js";
 import { listBuiltinRuntimeStatuses } from "#src/agent-runtime/builtin/builtinRuntimeStatus.js";
 import {
   assertAgentServerIdAvailable,
@@ -1156,6 +1159,8 @@ export function createZCodeAgentService(
   >();
   // v4 conversation 帧 fan-out：workspace 级 emitter，renderer 侧按 topic 自行路由。
   const conversationFrameEmitters = new Map<string, Emitter<ConversationTopicWireCandidate>>();
+  // ACP 会话不在 zcode-cli 中，其分片附件由 Host 直接接收（见 acpAttachmentUploads.ts）。
+  const acpAttachmentUploads = new AcpAttachmentUploads();
   const acpV4Bridge = new AcpV4Bridge(
     automationTaskIndexRepo,
     (target, frame) => getConversationFrameEmitter(target).fire(frame),
@@ -5375,6 +5380,19 @@ export function createZCodeAgentService(
     async attachmentBeginV4(params: ZCodeAgentAttachmentBeginParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }))
+        return acpAttachmentUploads.begin(
+          v4AttachmentBeginParamsSchema.parse({
+            connectionId: trusted.connectionId,
+            uploadId: params.uploadId,
+            sessionId: params.sessionId,
+            fileName: params.fileName,
+            mime: params.mime,
+            totalBytes: params.totalBytes,
+            totalChunks: params.totalChunks,
+            checksum: params.checksum,
+          }),
+        );
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
@@ -5393,6 +5411,16 @@ export function createZCodeAgentService(
     async attachmentChunkV4(params: ZCodeAgentAttachmentChunkParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }))
+        return acpAttachmentUploads.chunk(
+          v4AttachmentChunkParamsSchema.parse({
+            connectionId: trusted.connectionId,
+            uploadId: params.uploadId,
+            sessionId: params.sessionId,
+            chunkIndex: params.chunkIndex,
+            dataBase64: params.dataBase64,
+          }),
+        );
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
@@ -5408,6 +5436,12 @@ export function createZCodeAgentService(
     async attachmentCommitV4(params: ZCodeAgentAttachmentTerminalParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }))
+        return acpAttachmentUploads.commit({
+          connectionId: trusted.connectionId,
+          uploadId: params.uploadId,
+          sessionId: params.sessionId,
+        });
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
@@ -5425,6 +5459,14 @@ export function createZCodeAgentService(
     async attachmentAbortV4(params: ZCodeAgentAttachmentTerminalParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId })) {
+        acpAttachmentUploads.abort({
+          connectionId: trusted.connectionId,
+          uploadId: params.uploadId,
+          sessionId: params.sessionId,
+        });
+        return;
+      }
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
