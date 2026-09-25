@@ -323,6 +323,7 @@ export async function runCase(testCase, options) {
         for (const [ok, message, detail] of await testCase.verify({
           workspace,
           timeline: dom.timelineText,
+          caseDir,
         }))
           check(ok, message, detail);
       if (!testCase.live)

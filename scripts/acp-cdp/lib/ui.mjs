@@ -289,7 +289,18 @@ export async function pasteNumberImage({ page, click, logAction }, text) {
       new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
     );
   }, text);
-  await page.locator('img[src^="blob:"], img[src^="data:"]').first().waitFor({ timeout: 20_000 });
+  // 附件区出现该图片（缩略图或文件名）即表示已被输入框接收；空白会话页的装饰 logo 不算。
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll("img")].some(
+        (img) =>
+          !img.hasAttribute("data-v4-draft-logo") &&
+          /^(blob:|data:image\/png)/.test(img.getAttribute("src") ?? "") &&
+          img.getBoundingClientRect().width > 0,
+      ) || document.body.innerText.includes("pasted-number"),
+    undefined,
+    { timeout: 20_000 },
+  );
   // 缩略图先于上传完成出现；给分片上传留出时间。
   await page.waitForTimeout(3000);
 }

@@ -58,6 +58,35 @@ async function verifyTools({ workspace, timeline }) {
 export const VISION_MODEL = process.env.CODEZ_CDP_VISION_MODEL ?? "qwen/qwen3.7-flash";
 const VISION_NUMBER = "4827";
 
+/** 回放：请求中最后一条用户消息必须带图片块（Anthropic image / Responses input_image），回答里有数字。 */
+async function verifyPastedImage({ timeline, caseDir }) {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const entries = (await readFile(join(caseDir, "proxy.jsonl"), "utf8").catch(() => ""))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.main);
+  const carriedImage = entries.some(
+    (entry) =>
+      (entry.lastMessages ?? []).some(
+        (message) =>
+          message.role === "user" &&
+          Array.isArray(message.content) &&
+          message.content.includes("image"),
+      ) ||
+      (Array.isArray(entry.lastUserContent) && entry.lastUserContent.includes("input_image")),
+  );
+  return [
+    [
+      carriedImage,
+      "paste: the model request carried the pasted image",
+      entries.map((entry) => entry.lastMessages ?? entry.lastUserContent),
+    ],
+    [timeline.includes(VISION_NUMBER), `paste: the replayed answer ${VISION_NUMBER} rendered`],
+  ];
+}
+
 const BROWSER_SKIP =
   "Claude Code, Codex and Pi expose no browser tool in these configurations (Claude's WebFetch does not " +
   "render pages; CodeZ's browser-use belongs to its own agent), so there is no ACP browser action to drive";
@@ -143,6 +172,22 @@ export function buildCases({ mode, runtimes }) {
         // 默认模式下 Runtime 可能为录制中的 Bash 调用请求授权；像用户一样点“允许一次”，并记录次数。
         answerPermissions: true,
         expectPermission: false,
+      });
+      // 粘贴截图 → 分片上传 → ACP image 块：回放代理记录请求里是否带图片（不花钱）。
+      cases.push({
+        id: `${runtime}--paste-image`,
+        runtime,
+        title: `${label} pasted image replay`,
+        configId: `cdp-replay-${runtime}-vision`,
+        configName: `CDP replay ${label} vision`,
+        fixture: `${runtime}-vision.json`,
+        vision: true,
+        pasteImageText: VISION_NUMBER,
+        prompts: ["What number is written in the attached image?"],
+        provider: (url, model) => replayProvider(runtime, url, model),
+        answerPermissions: true,
+        expectPermission: false,
+        verify: verifyPastedImage,
       });
       if (runtime === "pi") {
         cases.push({

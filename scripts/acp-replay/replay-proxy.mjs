@@ -250,11 +250,18 @@ async function handleResponses(req, res, body) {
   const reply = main
     ? cursor.advance(responsesIsContinuation(body))
     : { events: [{ kind: "text", text: "Replay", delay_ms: 0 }], stop: "end_turn", side: true };
+  // 最后一条 user 消息的内容类型（例如 input_image），用于核对粘贴图片是否进入请求。
+  const lastUser = [...(Array.isArray(body.input) ? body.input : [])]
+    .reverse()
+    .find((item) => item?.role === "user");
   log({
     api: "responses",
     path: req.url,
     params: requestParams(body),
     main,
+    lastUserContent: Array.isArray(lastUser?.content)
+      ? lastUser.content.map((part) => part?.type)
+      : typeof lastUser?.content,
     turn: reply.turn,
     segment: reply.segment,
     stop: reply.stop,

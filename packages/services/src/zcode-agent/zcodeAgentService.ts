@@ -21,6 +21,7 @@ import type { OffPeakClientConfig } from "#src/coding-plan-subscription/codingPl
 import {
   ZCODE_SESSION_RUNTIME_PREFERENCES_REQUEST_TIMEOUT_MS,
   ACP_DEFAULT_MODEL_ID,
+  ACP_DRAFT_ATTACHMENT_SESSION_PREFIX,
   formatLogPrefix,
   resolveWorkspaceKey,
   type TraceId,
@@ -1161,6 +1162,13 @@ export function createZCodeAgentService(
   const conversationFrameEmitters = new Map<string, Emitter<ConversationTopicWireCandidate>>();
   // ACP 会话不在 zcode-cli 中，其分片附件由 Host 直接接收（见 acpAttachmentUploads.ts）。
   const acpAttachmentUploads = new AcpAttachmentUploads();
+  // ACP 会话（含尚未创建的草稿）的附件上传由 Host 处理，其余转发给 zcode-cli。
+  // 修复原因：新建 ACP 对话在首条消息前还没有任务，UI 以 acp-draft- 前缀的临时会话 ID 上传粘贴图片。
+  const ownsAcpUpload = async (
+    params: Omit<Parameters<AcpV4Bridge["isAcpTask"]>[0], "taskId"> & { sessionId: string },
+  ) =>
+    params.sessionId.startsWith(ACP_DRAFT_ATTACHMENT_SESSION_PREFIX) ||
+    (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }));
   const acpV4Bridge = new AcpV4Bridge(
     automationTaskIndexRepo,
     (target, frame) => getConversationFrameEmitter(target).fire(frame),
@@ -5380,7 +5388,7 @@ export function createZCodeAgentService(
     async attachmentBeginV4(params: ZCodeAgentAttachmentBeginParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
-      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }))
+      if (await ownsAcpUpload(params))
         return acpAttachmentUploads.begin(
           v4AttachmentBeginParamsSchema.parse({
             connectionId: trusted.connectionId,
@@ -5411,7 +5419,7 @@ export function createZCodeAgentService(
     async attachmentChunkV4(params: ZCodeAgentAttachmentChunkParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
-      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }))
+      if (await ownsAcpUpload(params))
         return acpAttachmentUploads.chunk(
           v4AttachmentChunkParamsSchema.parse({
             connectionId: trusted.connectionId,
@@ -5436,7 +5444,7 @@ export function createZCodeAgentService(
     async attachmentCommitV4(params: ZCodeAgentAttachmentTerminalParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
-      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }))
+      if (await ownsAcpUpload(params))
         return acpAttachmentUploads.commit({
           connectionId: trusted.connectionId,
           uploadId: params.uploadId,
@@ -5459,7 +5467,7 @@ export function createZCodeAgentService(
     async attachmentAbortV4(params: ZCodeAgentAttachmentTerminalParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
-      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId })) {
+      if (await ownsAcpUpload(params)) {
         acpAttachmentUploads.abort({
           connectionId: trusted.connectionId,
           uploadId: params.uploadId,
