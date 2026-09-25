@@ -83,8 +83,15 @@ export async function configureRuntimeInSettings(
     await page.keyboard.type(addModel, { delay: 5 });
     if (addModelVision) {
       // 图片输入要求模型声明 Vision；像用户一样勾选。
-      const vision = page.getByRole("dialog").getByRole("checkbox", { name: /vision/i });
-      if ((await vision.getAttribute("aria-checked")) !== "true") await click(vision, "Vision");
+      // 标签为 “Image input”；Claude Code 自行处理图片，没有该开关，此时跳过。
+      const vision = page
+        .getByRole("dialog")
+        .getByRole("checkbox", { name: /image input|vision|图片输入/i });
+      if (
+        (await vision.count()) > 0 &&
+        (await vision.first().getAttribute("aria-checked")) !== "true"
+      )
+        await click(vision.first(), "Image input");
     }
     await screenshot?.("settings-add-model-dialog");
     await click(
