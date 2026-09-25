@@ -647,6 +647,8 @@ export interface IZCodeAgentService {
     deviceAuth?: boolean;
   }): Promise<BuiltinRuntimeAuthResult>;
   logoutAgentRuntime(params: { runtimeId: AgentRuntimeId }): Promise<BuiltinRuntimeAuthResult>;
+  /** 浏览器登录显示授权码时，把用户粘贴的授权码交给进行中的登录进程。 */
+  submitAgentRuntimeLoginCode(params: { runtimeId: AgentRuntimeId; code: string }): Promise<void>;
   /** 认证状态变化（Host AcpAuthStateStore）：只作为重新读取 listAgentRuntimes 的触发信号。 */
   onDynamicAgentRuntimeAuthChange(): Event<BuiltinRuntimeAuthChange>;
   saveAgentServerModels(

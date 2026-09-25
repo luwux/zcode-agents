@@ -3,6 +3,7 @@ import { CircleIcon, CopyIcon, ExternalLinkIcon, Loader2Icon } from "lucide-reac
 import type { BuiltinRuntimeAuthResult, BuiltinRuntimeCatalogEntry } from "@zcode/services";
 import { TID_ACP_BUILTIN_CONTROL, testId } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
+import { Input } from "@/components/ui/input.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useServices } from "@/hooks/useServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -14,6 +15,9 @@ import {
   signInNeedsTerminal,
   signInScriptCommand,
 } from "./builtinAcpSignInMessage.js";
+
+const PASTE_CODE_PROMPT = /paste code here/i;
+const PASTE_CODE_LINE = /^.*paste code here.*$/gim;
 
 const STATE_PRESENTATION = {
   authenticated: { id: "state.authenticated", color: "text-success" },
@@ -42,6 +46,8 @@ export function BuiltinAcpSignInPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [submittingCode, setSubmittingCode] = useState(false);
   const auth = status.builtin.authMode;
   const state = status.builtin.authState;
   const text = (id: string, values?: Record<string, string>) =>
@@ -77,10 +83,24 @@ export function BuiltinAcpSignInPanel({
     );
   const signOut = () =>
     void run("sign-out", () => zcodeAgentService.logoutAgentRuntime({ runtimeId: status.id }));
-  const copy = async (code: string) => {
+  const submitCode = async () => {
+    const value = code.trim();
+    if (!value) return;
+    setSubmittingCode(true);
+    setError(null);
     try {
-      await navigator.clipboard.writeText(code);
-      setCopied(code);
+      await zcodeAgentService.submitAgentRuntimeLoginCode({ runtimeId: status.id, code: value });
+      setCode("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSubmittingCode(false);
+    }
+  };
+  const copy = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(value);
     } catch (cause) {
       logger.warn("[BuiltinAcpSignIn] 复制设备码失败", cause);
     }
@@ -90,6 +110,10 @@ export function BuiltinAcpSignInPanel({
   const presentation = STATE_PRESENTATION[state];
   // 失败原因由 Host 放在 reason 中（如 “Sign-in failed: …”）；登录返回的提示优先展示。
   const shown = message ?? (state === "auth-required" ? status.reason : undefined);
+  // 修复原因：Claude 登录在浏览器显示授权码时，CLI 输出 “Paste code here if prompted >” 并从 stdin
+  // 读取；这里把该提示行替换为输入框，授权码经 Host 写入登录进程。
+  const awaitingCode = state === "authenticating" && !!shown && PASTE_CODE_PROMPT.test(shown);
+  const displayed = awaitingCode ? shown.replace(PASTE_CODE_LINE, "").trim() : shown;
 
   return (
     <div className="space-y-2" data-testid={testId(TID_ACP_BUILTIN_CONTROL, "account")}>
@@ -163,21 +187,21 @@ export function BuiltinAcpSignInPanel({
           {text("cliLoginSignOutHint", { runtime: entry.name })}
         </p>
       ) : null}
-      {shown ? (
+      {displayed ? (
         <div
           className="space-y-1 rounded-lg border border-input-border bg-input px-3 py-2 text-ui-sm text-foreground"
           data-testid={testId(TID_ACP_BUILTIN_CONTROL, "sign-in-message")}
         >
-          {signInNeedsTerminal(shown) ? (
+          {signInNeedsTerminal(displayed) ? (
             <>
-              <p className="break-words">{shown}</p>
+              <p className="break-words">{displayed}</p>
               <p className="text-foreground-subtle">{text("terminalHint")}</p>
               <code className="block select-all break-all rounded-sm bg-surface px-2 py-1 font-mono">
                 {signInScriptCommand(status.id)}
               </code>
             </>
           ) : (
-            parseSignInMessage(shown).map((segments, line) => (
+            parseSignInMessage(displayed).map((segments, line) => (
               <p key={line} className="break-words">
                 {segments.map((segment, index) =>
                   segment.kind === "text" ? (
@@ -218,6 +242,35 @@ export function BuiltinAcpSignInPanel({
             ))
           )}
         </div>
+      ) : null}
+      {awaitingCode ? (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          data-testid={testId(TID_ACP_BUILTIN_CONTROL, "sign-in-code")}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitCode();
+          }}
+        >
+          <Input
+            className="min-w-0 flex-1 font-mono"
+            value={code}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={text("signInCodePlaceholder")}
+            aria-label={text("signInCodePlaceholder")}
+            onChange={(event) => setCode(event.target.value)}
+          />
+          <Button
+            type="submit"
+            variant="outline"
+            className="rounded-lg"
+            disabled={submittingCode || !code.trim()}
+          >
+            {submittingCode ? <Loader2Icon className="animate-spin" aria-hidden="true" /> : null}
+            {text("signInCodeSubmit")}
+          </Button>
+        </form>
       ) : null}
       {error ? (
         <p role="alert" className="text-ui-sm text-destructive">

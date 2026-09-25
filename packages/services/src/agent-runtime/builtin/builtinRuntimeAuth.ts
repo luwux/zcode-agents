@@ -75,6 +75,21 @@ function assertLoginAllowed(config: AgentConfig): void {
  */
 const loginsInFlight = new Map<string, BuiltinLoginHandle>();
 
+/**
+ * 进行中的终端登录进程的 stdin，按配置 id 索引。
+ * 修复原因：`claude auth login` 在浏览器未能回调本地端口时（手动打开链接、跨设备等）会显示授权码页面，
+ * 并在输出里提示 “Paste code here if prompted >”，从 stdin 读取授权码；原实现 stdin 为 ignore，
+ * 设置页也没有输入入口，登录只能卡住直至超时。
+ */
+const loginInputs = new Map<string, (line: string) => void>();
+
+/** 把用户粘贴的授权码写入该配置进行中的登录进程；没有等待输入的登录时报错。 */
+export function submitBuiltinLoginCode(configId: string, code: string): void {
+  const write = loginInputs.get(configId);
+  if (!write) throw new Error("No sign-in is waiting for a code");
+  write(code.trim());
+}
+
 /** 仅 TUI 的终端方法（claude-agent-acp 在远程/NO_BROWSER 环境下的 `claude-login`，args 只有 --cli）。 */
 export function isInteractiveOnlyMethod(method: AuthMethod): boolean {
   if (!("type" in method) || method.type !== "terminal") return false;
@@ -117,7 +132,14 @@ function startLoginOnce(
           throw new Error("Device sign-in is only available for Codex");
         const codex = launch.env?.CODEX_PATH;
         if (!codex) throw new Error("Managed Codex binary is unavailable");
-        await runLoginProcess(codex, ["login", "--device-auth"], launch.env, deps, announce);
+        await runLoginProcess(
+          codex,
+          ["login", "--device-auth"],
+          launch.env,
+          deps,
+          announce,
+          config.id,
+        );
       } else {
         const connection = await acpStartupGate.run(() =>
           AcpConnection.open(
@@ -163,6 +185,7 @@ function startLoginOnce(
             { ...launch.env, ...method.env },
             deps,
             announce,
+            config.id,
           );
       }
       states.markAuthenticated(config.id);
@@ -224,6 +247,8 @@ async function runLoginProcess(
   env: NodeJS.ProcessEnv | undefined,
   deps: BuiltinLoginDependencies,
   announce: (value: { message?: string }) => void,
+  /** 登录流程传入配置 id 以接收粘贴的授权码；登出不需要输入。 */
+  inputKey?: string,
 ): Promise<void> {
   if (deps.interactive) {
     // 终端脚本：直接继承 TTY，交给 CLI 自己的登录界面。
@@ -239,9 +264,15 @@ async function runLoginProcess(
   const child = spawn(command, [...args], {
     cwd: deps.cwd,
     env: env ?? {},
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
+  // 登录进程提前退出时写入会 EPIPE；忽略即可，结果以退出码为准。
+  child.stdin.on("error", () => {});
+  const writeLine = (line: string) => {
+    if (!child.stdin.destroyed) child.stdin.write(`${line}\n`);
+  };
+  if (inputKey) loginInputs.set(inputKey, writeLine);
   let output = "";
   const onChunk = (chunk: Buffer) => {
     const text = chunk.toString("utf8");
@@ -260,5 +291,7 @@ async function runLoginProcess(
     if (code !== 0) throw new Error(`login process exited with ${code}`);
   } finally {
     clearTimeout(timeout);
+    if (inputKey && loginInputs.get(inputKey) === writeLine) loginInputs.delete(inputKey);
+    child.stdin.destroy();
   }
 }

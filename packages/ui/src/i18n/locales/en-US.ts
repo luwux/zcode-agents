@@ -3767,6 +3767,9 @@ const enUS: Record<string, string> = {
   "settings.modelProvider.builtinAcp.signInStarting": "Starting sign-in…",
   "settings.modelProvider.builtinAcp.openSignInPage": "Open sign-in page",
   "settings.modelProvider.builtinAcp.copyCode": "Copy code",
+  "settings.modelProvider.builtinAcp.signInCodePlaceholder":
+    "Paste the authentication code from the browser",
+  "settings.modelProvider.builtinAcp.signInCodeSubmit": "Submit code",
   "settings.modelProvider.builtinAcp.codeCopied": "Copied",
   "settings.modelProvider.builtinAcp.terminalHint":
     "This sign-in method needs a terminal. Quit CodeZ, then run this command in the CodeZ source folder:",

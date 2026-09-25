@@ -21,6 +21,7 @@ import {
 import {
   logoutBuiltinRuntime,
   startBuiltinLogin,
+  submitBuiltinLoginCode,
 } from "#src/agent-runtime/builtin/builtinRuntimeAuth.js";
 import type { AgentProviderSettings } from "#src/agent-runtime/builtin/builtinProviderPresets.js";
 import { isBuiltinAcpRuntime } from "#src/agent-runtime/builtin/builtinRuntimeCatalog.js";
@@ -62,6 +63,17 @@ const loginRequestSchema = z.object({
 });
 
 const logoutRequestSchema = z.object({ runtimeId: agentRuntimeIdSchema });
+
+const loginCodeRequestSchema = z.object({
+  runtimeId: agentRuntimeIdSchema,
+  // 授权码为单行；拒绝换行，避免向登录进程注入额外输入。
+  code: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2048)
+    .regex(/^[^\r\n]+$/),
+});
 
 function parseRequest<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
   const parsed = schema.safeParse(value);
@@ -205,6 +217,15 @@ export async function loginBuiltinRuntime(params: {
         ? { message: snapshot.message }
         : {}),
   };
+}
+
+/** 浏览器显示授权码时，把用户粘贴的授权码交给进行中的登录进程；完成状态仍由 authState 呈现。 */
+export async function submitBuiltinRuntimeLoginCode(params: {
+  runtimeId: string;
+  code: string;
+}): Promise<void> {
+  const request = parseRequest(loginCodeRequestSchema, params, "sign-in code");
+  submitBuiltinLoginCode(request.runtimeId, request.code);
 }
 
 export async function logoutBuiltinRuntimeConfig(params: {

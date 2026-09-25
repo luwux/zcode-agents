@@ -12,6 +12,7 @@ import {
   logoutBuiltinRuntime,
   selectAuthMethod,
   startBuiltinLogin,
+  submitBuiltinLoginCode,
 } from "../src/agent-runtime/builtin/builtinRuntimeAuth.js";
 import type { AgentConfig } from "../src/agent-runtime/builtin/agentConfigRegistry.js";
 import { setDataBaseDir } from "../src/paths.js";
@@ -370,6 +371,61 @@ for await (const line of createInterface({ input: process.stdin })) {
     );
     assert.equal((await handle.completion).state, "auth-required");
     assert.match(states.get("tui").message ?? "", /needs an interactive terminal.*login\.ts tui/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a browser sign-in that shows a code accepts the pasted code on the login process stdin", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "codez-acp-paste-"));
+  const agentFile = join(dir, "paste-agent.mjs");
+  const marker = join(dir, "code");
+  // 模拟 `claude auth login`：打印链接与 “Paste code here if prompted >”，从 stdin 读一行授权码。
+  await writeFile(
+    agentFile,
+    `import { createInterface } from 'node:readline';
+import { writeFileSync } from 'node:fs';
+const input = createInterface({ input: process.stdin });
+if (process.argv.includes('--login')) {
+  process.stdout.write('If the browser did not open, visit: https://login.example/authorize\\nPaste code here if prompted > ');
+  for await (const line of input) { writeFileSync(process.argv[2], line); process.exit(line === 'good#state' ? 0 : 1); }
+}
+for await (const line of input) {
+  const r = JSON.parse(line);
+  if (r.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: r.id, result: {
+    protocolVersion: r.params.protocolVersion, agentCapabilities: {},
+    authMethods: [{ id: 'claude-ai-login', name: 'Subscription', type: 'terminal', args: ['--login'] }] } }) + '\\n');
+}`,
+  );
+  const states = new AcpAuthStateStore();
+  const config: AgentConfig = {
+    id: "paste",
+    name: "Paste",
+    runtime: "claude-code",
+    auth: "cli-login",
+  };
+  try {
+    assert.throws(() => submitBuiltinLoginCode("paste", "early"), /No sign-in is waiting/);
+    const handle = startBuiltinLogin(
+      config,
+      {},
+      {
+        resolveLaunch: async () => ({
+          executable: process.execPath,
+          args: [agentFile, marker],
+          env: process.env,
+        }),
+        cwd: dir,
+        authStates: states,
+      },
+    );
+    assert.match((await handle.started).message ?? "", /Paste code here/);
+    assert.equal(states.get("paste").state, "authenticating");
+    submitBuiltinLoginCode("paste", "  good#state  ");
+    assert.equal((await handle.completion).state, "authenticated");
+    assert.equal(await readFile(marker, "utf8"), "good#state");
+    // 登录结束后不再接受授权码。
+    assert.throws(() => submitBuiltinLoginCode("paste", "late"), /No sign-in is waiting/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

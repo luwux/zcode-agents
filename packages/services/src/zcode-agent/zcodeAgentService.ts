@@ -328,6 +328,7 @@ import {
   deleteBuiltinRuntimeConfig,
   loginBuiltinRuntime,
   logoutBuiltinRuntimeConfig,
+  submitBuiltinRuntimeLoginCode,
   onBuiltinRuntimeAuthChange,
   saveBuiltinRuntimeConfig,
   type BuiltinRuntimeAuthChange,
@@ -3476,6 +3477,9 @@ export function createZCodeAgentService(
     },
     async logoutAgentRuntime(params) {
       return logoutBuiltinRuntimeConfig(params);
+    },
+    async submitAgentRuntimeLoginCode(params) {
+      return submitBuiltinRuntimeLoginCode(params);
     },
     onDynamicAgentRuntimeAuthChange() {
       return agentRuntimeAuthChangeEmitter.event;

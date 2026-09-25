@@ -3280,6 +3280,8 @@ const zhCN: Record<string, string> = {
   "settings.modelProvider.builtinAcp.signInStarting": "正在启动登录…",
   "settings.modelProvider.builtinAcp.openSignInPage": "打开登录页面",
   "settings.modelProvider.builtinAcp.copyCode": "复制代码",
+  "settings.modelProvider.builtinAcp.signInCodePlaceholder": "粘贴浏览器中显示的验证码",
+  "settings.modelProvider.builtinAcp.signInCodeSubmit": "提交",
   "settings.modelProvider.builtinAcp.codeCopied": "已复制",
   "settings.modelProvider.builtinAcp.terminalHint":
     "该登录方式需要终端：退出 CodeZ 后，在 CodeZ 源码目录运行以下命令：",
