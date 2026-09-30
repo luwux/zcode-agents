@@ -220,32 +220,38 @@ export async function pickRuntimeInModelPicker(
   return { pickerItems: names, trigger: (await trigger.innerText()).trim() };
 }
 
-/** Composer "ACP session mode" menu → mode by its advertised name (never a bypass mode). */
+/**
+ * Composer ACP mode menu → mode by its ACP id (never a bypass mode). The menu shows CodeZ's
+ * unified labels (e.g. "Ask before changes"), so the Agent's own mode name is not on screen.
+ */
 export async function pickAcpSessionMode({ page, click }, mode) {
-  const modeButton = page.getByRole("button", { name: "ACP session mode", exact: true });
+  const modeButton = page.locator('[data-testid="v4-composer-acp-mode"]');
   await modeButton.waitFor({ timeout: 15_000 });
   const deadline = Date.now() + 60_000;
   while (!(await modeButton.isEnabled())) {
     if (Date.now() > deadline) throw new Error("ACP session modes never loaded");
     await sleep(250);
   }
-  await click(modeButton, "ACP session mode");
+  await click(modeButton, "ACP mode menu");
   const items = page.getByRole("menuitemradio");
   await items.first().waitFor({ timeout: 10_000 });
-  const available = (await items.allInnerTexts()).map((item) => item.trim());
-  const item = page.getByRole("menuitemradio", { name: mode.name, exact: true });
+  const available = await items.evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute("data-acp-mode-id")),
+  );
+  const item = page.locator(`[role="menuitemradio"][data-acp-mode-id="${mode.id}"]`);
   if ((await item.count()) === 0)
-    throw new Error(`mode "${mode.name}" not offered; modes: ${available.join(", ")}`);
-  await click(item, `mode ${mode.name}`);
+    throw new Error(`mode "${mode.id}" not offered; modes: ${available.join(", ")}`);
+  const label = (await item.innerText()).split("\n")[0].trim();
+  await click(item, `mode ${mode.id} (${label})`);
   await page.waitForFunction(
-    (name) =>
-      [...document.querySelectorAll("button[aria-label='ACP session mode']")].some(
-        (button) => button.textContent?.trim() === name,
-      ),
-    mode.name,
+    (id) =>
+      document
+        .querySelector('[data-testid="v4-composer-acp-mode"]')
+        ?.getAttribute("data-acp-mode-id") === id,
+    mode.id,
     { timeout: 10_000 },
   );
-  return { available, selected: mode.name };
+  return { available, selected: mode.id, label };
 }
 
 /** Completed turns fold their tool cards into "Worked for …"; open each one with a click. */

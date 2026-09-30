@@ -56,7 +56,6 @@ import {
   InfoIcon,
   RotateCcwIcon,
   SquareIcon,
-  ShieldIcon,
   XIcon,
 } from "lucide-react";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
@@ -72,13 +71,6 @@ import {
   AttachmentPreview,
 } from "@/components/ai-elements/attachments.js";
 import { Button } from "@/components/ui/button.js";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu.js";
 import {
   Dialog,
   DialogClose,
@@ -147,6 +139,7 @@ import { consumeV4ComposerDraftWorkspaceTransferRequest } from "@/v4/composer/co
 import { useComposerAttachments } from "@/v4/composer/useComposerAttachments.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import { CodeCommentAttachmentChip } from "@/v4/composer/CodeCommentAttachmentChip.js";
+import { AcpComposerModeSwitch } from "@/v4/composer/AcpComposerModeSwitch.js";
 import { removeCodeCommentPreview } from "@/v4/composer/codeCommentPreviewSync.js";
 import {
   countComposerPromptContexts,
@@ -380,7 +373,7 @@ interface ConversationComposerProps {
   /** 当前 Composer 是否能构造完整 Submission；空模型或空 Reasoning 时为 false。 */
   submissionReady?: boolean;
   agentRuntimeId?: AgentRuntimeId;
-  acpModes?: Array<{ id: string; name: string; description?: string }>;
+  acpModes?: Array<{ id: string; name: string; description?: string; kind?: string }>;
   acpSelectedMode?: string;
   acpModeLoading?: boolean;
   onSelectAcpMode?: (modeId: string) => void;
@@ -2308,40 +2301,16 @@ function ConversationComposerImpl({
             agentRuntimeId === "zcode-cli" ? (
               leadingActionsNode
             ) : (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={
-                      disabled ||
-                      acpModeLoading ||
-                      !acpModes.length ||
-                      (!draftMode && snapshot?.availability.switchModelConfig.allowed === false)
-                    }
-                    aria-label={intl.formatMessage({ id: "chat.toolbar.acpMode.label" })}
-                    title={intl.formatMessage({
-                      id: acpModes.length
-                        ? "chat.toolbar.acpMode.label"
-                        : "chat.toolbar.acpMode.unavailable",
-                    })}
-                    className="h-7 gap-1 px-2 text-ui-base"
-                  >
-                    <ShieldIcon className="size-4" />
-                    {acpModes.find((mode) => mode.id === acpSelectedMode)?.name ??
-                      intl.formatMessage({ id: "chat.toolbar.acpMode.placeholder" })}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent side="top" className="min-w-40">
-                  <DropdownMenuRadioGroup value={acpSelectedMode} onValueChange={onSelectAcpMode}>
-                    {acpModes.map((mode) => (
-                      <DropdownMenuRadioItem key={mode.id} value={mode.id} title={mode.description}>
-                        {mode.name}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <AcpComposerModeSwitch
+                modes={acpModes}
+                selectedMode={acpSelectedMode}
+                disabled={
+                  disabled ||
+                  acpModeLoading ||
+                  (!draftMode && snapshot?.availability.switchModelConfig.allowed === false)
+                }
+                onSelect={(modeId) => onSelectAcpMode?.(modeId)}
+              />
             )
           }
           submitControl={submitControlNode}

@@ -6049,6 +6049,9 @@ const enUS: Record<string, string> = {
   "mode.description.glm.edit": "Edit files automatically.",
   "mode.description.glm.plan": "Plan before editing.",
   "mode.description.glm.yolo": "Run with fewer confirmations.",
+  "mode.label.acp.autoReview": "Auto review",
+  "mode.description.acp.autoReview":
+    "The agent's model approves safe actions and asks you about risky ones.",
   "todo.panel.title": "Todo",
   "todo.panel.currentTask": "Current task",
   "todo.panel.completed": "Todo completed",

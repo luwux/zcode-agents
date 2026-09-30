@@ -7,6 +7,7 @@ import {
   type AcpRuntimeSpec,
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import { toAcpModeOption } from "#src/agent-runtime/acpModeOption.js";
 import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
 
 /** 草稿会话使用临时 ACP 进程读取模型与思考选项，不留下空会话绑定。 */
@@ -90,12 +91,7 @@ export async function discoverAcpRuntimeConfig(input: {
       selectedModel,
       thoughtLevels: levels.map(({ value, name }) => ({ value, name })),
       selectedThought: levels.find((level) => level.selected)?.value ?? "",
-      modes:
-        connection.modeState()?.availableModes.map(({ id, name, description }) => ({
-          id,
-          name,
-          ...(description ? { description } : {}),
-        })) ?? [],
+      modes: connection.modeState()?.availableModes.map(toAcpModeOption) ?? [],
       selectedMode: connection.modeState()?.currentModeId ?? "",
     };
   } finally {

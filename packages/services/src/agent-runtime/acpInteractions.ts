@@ -41,18 +41,7 @@ export class AcpInteractionBook<P> {
           toolName: request.toolCall.title || "ACP tool",
           summary: request.toolCall.title || "ACP tool permission",
           detail: request.toolCall,
-          options: request.options.map((option) => ({
-            optionId: option.optionId,
-            label: option.name,
-            kind:
-              option.kind === "allow_once"
-                ? "allowOnce"
-                : option.kind === "allow_always"
-                  ? "allowAlways"
-                  : option.kind === "reject_once" || option.kind === "reject_always"
-                    ? "deny"
-                    : "custom",
-          })),
+          options: toPermissionOptions(request.options),
         },
       },
       ...(childSessionId ? { childSessionId } : {}),
@@ -147,4 +136,30 @@ function subagentOrigin<P>(entry: AcpSubagentEntry<P>) {
     parentToolCallId: entry.hostToolCallId,
     ...(entry.task ? { description: boundedSummary(entry.task) } : {}),
   };
+}
+
+/**
+ * 修复原因：各 Agent 的权限选项文案各不相同（Claude “Yes / No”，Codex “Yes, proceed / No, and tell
+ * Codex what to do differently”），权限弹窗把非通用文案原样展示，同一个确认在不同 Agent 下长得不一样。
+ * 标准的 allow/reject 选项改用 CodeZ 通用名称，由弹窗按 kind 本地化并给出统一说明；
+ * 同类选项重复时（例如 reject_once 与 reject_always 都映射为 deny）第二个保留 Agent 原文以便区分。
+ */
+const CANONICAL_PERMISSION_OPTIONS = {
+  allow_once: { kind: "allowOnce", label: "Allow" },
+  allow_always: { kind: "allowAlways", label: "Always allow" },
+  reject_once: { kind: "deny", label: "Deny" },
+  reject_always: { kind: "deny", label: "Deny" },
+} as const;
+
+function toPermissionOptions(options: RequestPermissionRequest["options"]) {
+  const used = new Set<string>();
+  return options.map((option) => {
+    const canonical =
+      CANONICAL_PERMISSION_OPTIONS[option.kind as keyof typeof CANONICAL_PERMISSION_OPTIONS];
+    if (!canonical)
+      return { optionId: option.optionId, label: option.name, kind: "custom" as const };
+    const label = used.has(canonical.kind) ? option.name : canonical.label;
+    used.add(canonical.kind);
+    return { optionId: option.optionId, label, kind: canonical.kind };
+  });
 }

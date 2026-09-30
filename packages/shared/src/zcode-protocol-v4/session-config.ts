@@ -14,7 +14,15 @@ export const sessionConfigStateSchema = z.object({
   /** ACP Agent 当次会话实际公布的模型选项；旧 ZCode 快照缺省为空。 */
   acpModelOptions: z.array(z.object({ id: z.string(), name: z.string() })).optional(),
   acpModeOptions: z
-    .array(z.object({ id: z.string(), name: z.string(), description: z.string().optional() }))
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        description: z.string().optional(),
+        /** ACP 模式 `_meta.kind`（standard / plan / auto_review / full_access），UI 据此统一呈现。 */
+        kind: z.string().optional(),
+      }),
+    )
     .optional(),
   acpModeId: z.string().optional(),
   followupMode: z.enum(["queue", "guide"]),

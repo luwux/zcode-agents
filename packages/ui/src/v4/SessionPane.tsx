@@ -1325,7 +1325,7 @@ export function SessionPane({
       : "zcode-cli";
   const isAcpRuntime = selectedRuntimeId !== "zcode-cli";
   const [acpModes, setAcpModes] = useState<
-    Array<{ id: string; name: string; description?: string }>
+    Array<{ id: string; name: string; description?: string; kind?: string }>
   >([]);
   const [acpSelectedMode, setAcpSelectedMode] = useState("");
   const [acpModeLoading, setAcpModeLoading] = useState(false);

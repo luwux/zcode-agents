@@ -10,6 +10,7 @@ import {
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentRuntimeId } from "@zcode/shared";
 import type { SessionModeState } from "@agentclientprotocol/sdk";
+import { toAcpModeOption } from "#src/agent-runtime/acpModeOption.js";
 
 const HISTORY_WINDOW_ROWS = 60;
 const UNSUPPORTED = { allowed: false as const, reasonCode: "acpCapabilityUnsupported" };
@@ -120,11 +121,7 @@ export function buildAcpProjectionSnapshot(input: {
       acpModelOptions: input.modelOptions,
       ...(input.modes
         ? {
-            acpModeOptions: input.modes.availableModes.map(({ id, name, description }) => ({
-              id,
-              name,
-              ...(description ? { description } : {}),
-            })),
+            acpModeOptions: input.modes.availableModes.map(toAcpModeOption),
             acpModeId: input.modes.currentModeId,
           }
         : {}),
