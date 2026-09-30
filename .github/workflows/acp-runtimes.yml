@@ -2,6 +2,11 @@ name: ACP runtimes
 
 on:
   workflow_dispatch:
+    inputs:
+      record:
+        description: "Only record real Claude Code trajectories into replay fixtures (paid, a few cents)"
+        type: boolean
+        default: false
   push:
     branches: [feat/acp-builtin-runtimes-0dh65u]
   pull_request:
@@ -77,7 +82,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     # Paid (real OpenRouter usage): only on a manual dispatch from the Actions tab, never on push or PRs.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.record
     # The key is exposed only to the three steps that need it (never to install or third-party steps).
     steps:
       - uses: actions/checkout@v4
@@ -164,24 +169,24 @@ jobs:
       - name: CDP e2e against the replay proxy (loopback-only)
         run: node scripts/acp-cdp/run-cdp-e2e.mjs --runtimes-cache ~/.cache/codez-acp-runtimes --artifacts artifacts/cdp-replay
       - name: OpenRouter usage before
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.record
         id: before
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
       - name: CDP e2e against OpenRouter (MiMo v2.6 Flash)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.record
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node scripts/acp-cdp/run-cdp-e2e.mjs --mode live --no-build --no-install --runtimes-cache ~/.cache/codez-acp-runtimes --artifacts artifacts/cdp-live
       - name: OpenRouter usage after
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always() && github.event_name == 'workflow_dispatch' && !inputs.record
         id: after
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
       - name: Cost summary
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always() && github.event_name == 'workflow_dispatch' && !inputs.record
         env:
           BEFORE: ${{ steps.before.outputs.usage }}
           AFTER: ${{ steps.after.outputs.usage }}
@@ -198,5 +203,90 @@ jobs:
         if: always()
         with:
           name: desktop-cdp
+          path: artifacts
+          if-no-files-found: ignore
+
+  record:
+    name: Record Claude Code trajectories (OpenRouter, paid)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # Paid: only when dispatched with `record`. Converts the real runs into replay fixtures and
+    # commits them to this branch (a GITHUB_TOKEN push does not trigger another workflow run).
+    if: github.event_name == 'workflow_dispatch' && inputs.record
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/codez-acp-runtimes
+          key: acp-runtimes-${{ runner.os }}-${{ hashFiles('packages/services/src/agent-runtime/builtin/manifests/*.json', 'packages/services/src/agent-runtime/builtin/builtinRuntimeCatalog.ts', 'packages/services/src/agent-runtime/builtin/builtinRuntimeInstaller.ts', 'packages/services/src/agent-runtime/builtin/builtinProcess.ts') }}
+      - name: Install runtimes
+        working-directory: packages/services
+        run: CODEZ_ACP_RUNTIMES_DIR="$HOME/.cache/codez-acp-runtimes" node --import tsx ../../scripts/acp-replay/install-runtimes.ts
+      - name: OpenRouter usage before
+        id: before
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Record live Claude Code runs
+        working-directory: packages/services
+        continue-on-error: true
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/live-home" "$GITHUB_WORKSPACE/artifacts/record"
+          HOME="$RUNNER_TEMP/live-home" CODEZ_ACP_RUNTIMES_DIR="$HOME/.cache/codez-acp-runtimes" \
+            CODEZ_LIVE_RECORD=1 CODEZ_LIVE_FEATURES=1 \
+            CODEZ_E2E_ARTIFACTS="$GITHUB_WORKSPACE/artifacts/record" \
+            node --import tsx --test --test-concurrency=3 test/e2e/live/claude-code.live.e2e.ts
+      - name: OpenRouter usage after
+        if: always()
+        id: after
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Cost summary
+        if: always()
+        env:
+          BEFORE: ${{ steps.before.outputs.usage }}
+          AFTER: ${{ steps.after.outputs.usage }}
+        run: |
+          node -e '
+            const b = JSON.parse(process.env.BEFORE || "{}").usage, a = JSON.parse(process.env.AFTER || "{}").usage;
+            const line = (typeof a === "number" && typeof b === "number")
+              ? `OpenRouter cost for the recording: $${(a - b).toFixed(6)} (key usage ${b} -> ${a})`
+              : "OpenRouter cost unavailable";
+            console.log(line);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
+          '
+      - name: Convert recordings to fixtures and commit them
+        run: |
+          out=scripts/acp-replay/fixtures/recorded
+          mkdir -p "$out"
+          for rec in artifacts/record/*.record.jsonl; do
+            [ -s "$rec" ] || continue
+            name=$(basename "$rec" .record.jsonl | sed 's/^live-/claude-code-recorded-/; s/^claude-code-recorded-claude-code-/claude-code-recorded-/')
+            node scripts/acp-replay/recording-to-fixture.mjs "$rec" "$out/$name.json" \
+              --note "Recorded by CI run ${{ github.run_number }} with the real model; real output and timing." || true
+          done
+          if grep -rEq 'sk-or-v1-[A-Za-z0-9]{16,}' "$out"; then echo "secret found; not committing" >&2; exit 1; fi
+          git add "$out"
+          if git diff --cached --quiet; then echo "no fixtures recorded"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "test(acp-replay): record Claude Code trajectories (CI run ${{ github.run_number }})"
+          git push origin "HEAD:${{ github.ref_name }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recordings
           path: artifacts
           if-no-files-found: ignore

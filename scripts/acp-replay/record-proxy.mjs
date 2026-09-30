@@ -7,6 +7,10 @@
 // method, body and headers (the Authorization header passes through untouched). It records only
 // request/response BODIES plus status and a short event summary — never headers — so API keys cannot
 // end up in the log. Prints `{"url": "http://127.0.0.1:<port>"}` once listening.
+//
+// Each entry also carries `timing`: `[msSinceRequestStart, responseCharsSoFar]` per received chunk,
+// so `recording-to-fixture.mjs` can give every streamed event its real time offset. Bodies are kept
+// whole by default (a cut-off stream cannot be replayed); `--max-body` caps them for diagnostics.
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -18,7 +22,7 @@ const { values } = parseArgs({
     upstream: { type: "string" },
     log: { type: "string" },
     port: { type: "string", default: "0" },
-    "max-body": { type: "string", default: "400000" },
+    "max-body": { type: "string", default: "50000000" },
   },
 });
 if (!values.upstream || !values.log) {
@@ -61,6 +65,7 @@ const server = createServer(async (req, res) => {
   const started = Date.now();
   let status = 0;
   let responseText = "";
+  const timing = [];
   try {
     const response = await fetch(`${upstream}${req.url}`, {
       method: req.method,
@@ -77,7 +82,10 @@ const server = createServer(async (req, res) => {
     if (response.body)
       for await (const chunk of response.body) {
         res.write(chunk);
-        if (responseText.length < maxBody) responseText += decoder.decode(chunk, { stream: true });
+        if (responseText.length < maxBody) {
+          responseText += decoder.decode(chunk, { stream: true });
+          timing.push([Date.now() - started, responseText.length]);
+        }
       }
     res.end();
   } catch (error) {
@@ -104,6 +112,7 @@ const server = createServer(async (req, res) => {
       summary,
       request,
       response: responseText.slice(0, maxBody),
+      timing,
     })}\n`,
   );
   // One-line summary on stderr (no bodies) for CI logs.
