@@ -16,7 +16,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: acp-runtimes-${{ github.ref }}
+  # 修复原因：同一并发组只保留一个排队中的运行，手动触发的付费录制排队时会被随后的 push 运行
+  # 挤掉（取消）。手动运行单独成组；push / PR 运行仍按分支排队。
+  group: acp-runtimes-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && 'dispatch' || 'auto' }}
   # Live runs are paid: queue new runs behind a running one instead of cancelling it.
   cancel-in-progress: false
 
