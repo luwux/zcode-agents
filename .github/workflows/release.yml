@@ -1,0 +1,99 @@
+name: Release desktop
+
+# Builds unsigned CodeZ desktop packages on macOS (arm64), Windows (x64) and Linux (x64) and
+# attaches them to a GitHub release. Manual only; on a public repository the standard runners
+# used here cost nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create, e.g. v3.14.3-acp.1"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 24.14.0
+  PNPM_VERSION: 10.33.2
+
+jobs:
+  build:
+    name: Package ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, os: mac, arch: arm64 }
+          - { runner: windows-latest, os: win, arch: x64 }
+          - { runner: ubuntu-24.04, os: linux, arch: x64 }
+    env:
+      # Unsigned local-style build: never look for signing certificates on the runner.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Linux packaging tools (rpm, pacman)
+        if: matrix.os == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+      - run: pnpm install --frozen-lockfile
+      - name: Bundle
+        run: pnpm bundle:desktop -- --os ${{ matrix.os }} --arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codez-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.exe
+            packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.rpm
+            packages/desktop/dist/*.pkg.tar.zst
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          ls -la packages
+          notes="Unsigned CodeZ desktop builds with the built-in Claude Code, Codex and Pi ACP agents.
+
+          - macOS (Apple Silicon): open the .dmg and drag CodeZ to Applications. The app is not signed; if macOS blocks it, run \`sudo xattr -rd com.apple.quarantine /Applications/CodeZ.app\`.
+          - Windows (x64): run the installer .exe; SmartScreen may warn because it is unsigned.
+          - Linux (x64): AppImage, .deb, .rpm or Arch .pkg.tar.zst.
+
+          Built by GitHub Actions from ${GITHUB_SHA}. See README and NOTICE for licensing."
+          flags=(--repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "CodeZ $TAG" --notes "$notes")
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$TAG" "${flags[@]}" packages/*
