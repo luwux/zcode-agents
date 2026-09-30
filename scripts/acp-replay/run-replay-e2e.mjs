@@ -2,7 +2,7 @@
 // Offline replay e2e for the built-in Claude Code / Codex / Pi runtimes.
 //
 // 1. Installs the pinned runtimes with the production installer into a cache dir (needs network).
-// 2. Runs packages/services/test/e2e/{builtinRuntimesReplay,builtinModelsReplay,acpComplexReplay}.e2e.ts with a throwaway HOME. On Linux
+// 2. Runs packages/services/test/e2e/{builtinRuntimesReplay,builtinModelsReplay,acpComplexReplay,recordedReplay}.e2e.ts with a throwaway HOME. On Linux
 //    the run happens inside `unshare -rn` with only loopback up, so the CLIs cannot reach any
 //    network except the local replay proxy. Elsewhere egress is only discouraged via a dead proxy.
 //
@@ -54,6 +54,7 @@ const testArgs = [
   "test/e2e/builtinRuntimesReplay.e2e.ts",
   "test/e2e/builtinModelsReplay.e2e.ts",
   "test/e2e/acpComplexReplay.e2e.ts",
+  "test/e2e/recordedReplay.e2e.ts",
 ];
 
 let command = process.execPath;

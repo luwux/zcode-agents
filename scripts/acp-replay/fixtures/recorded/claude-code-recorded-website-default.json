@@ -4,17 +4,19 @@
   "model": "xiaomi/mimo-v2.6-flash",
   "note": "Recorded by CI run 55 with the real model; real output and timing.",
   "recorded": true,
+  "lanes": true,
   "turns": [
     {
       "user": {
-        "text": "<system-reminder>\nAs you answer the user's questions, you can use the following context:\n# gitStatus\nThis is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.\n\nCurrent branch: master\n\nMain branch (you will usually use this for PRs): main\n\nStatus:\n?? README.md\n\nRecent commits:\n\n\nIMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.\n</system-reminder>\n<system-reminder>\nAttribution for git commits and pull requests you create from here on (this replaces Claude Code's own earlier attribution guidance, such as a previous copy of this reminder; the user's own instructions about these lines, such as a CLAUDE.md or memory rule, take precedence over this reminder, but do not add attribution lines this reminder leaves out):\n- End git commit messages with:\nCo-Authored-By: Claude Code <noreply@anthropic.com>\n- End pull request descriptions with:\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n</system-reminder>\n\nBuild a tiny static website in the folder `site/` of this workspace: `site/index.html` with the title 'CodeZ Live Test', an element with id \"status\" and links to `style.css` and `script.js`; `site/style.css` with a few basic styles; and `site/script.js` that sets the text of #status to 'ready'. Use your file tools, then run `ls site` and end with the line WEBSITE DONE.",
+        "text": "Build a tiny static website in the folder `site/` of this workspace: `site/index.html` with the title 'CodeZ Live Test', an element with id \"status\" and links to `style.css` and `script.js`; `site/style.css` with a few basic styles; and `site/script.js` that sets the text of #status to 'ready'. Use your file tools, then run `ls site` and end with the line WEBSITE DONE.",
         "t_ms": 0
       },
       "events": [
         {
           "kind": "thinking",
           "t_ms": 2747,
-          "text": "The user wants a tiny static website. Let me create the three files with my file tools, then run `ls site`, then end with \"WEBSITE DONE\"."
+          "text": "The user wants a tiny static website. Let me create the three files with my file tools, then run `ls site`, then end with \"WEBSITE DONE\".",
+          "lane": "main"
         },
         {
           "kind": "tool_call",
@@ -22,9 +24,10 @@
           "call_id": "call_18e2496fe3f94b5cb9d67cf0",
           "name": "Write",
           "input": {
-            "file_path": "/tmp/codez-live-claude-code-website-nVrMvJ/workspace/site/index.html",
+            "file_path": "${WORKSPACE}/site/index.html",
             "content": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>CodeZ Live Test</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <h1>CodeZ Live Test</h1>\n  <div id=\"status\"></div>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n"
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "tool_call",
@@ -32,9 +35,10 @@
           "call_id": "call_cea94e14d6c343c1a67220c3",
           "name": "Write",
           "input": {
-            "file_path": "/tmp/codez-live-claude-code-website-nVrMvJ/workspace/site/style.css",
+            "file_path": "${WORKSPACE}/site/style.css",
             "content": "body {\n  font-family: system-ui, -apple-system, sans-serif;\n  max-width: 40rem;\n  margin: 4rem auto;\n  padding: 0 1rem;\n  color: #1a1a2e;\n  background: #f7f7fb;\n}\n\nh1 {\n  font-size: 2rem;\n  color: #2d5bec;\n}\n\n#status {\n  margin-top: 1rem;\n  padding: 0.75rem 1rem;\n  display: inline-block;\n  border-radius: 6px;\n  background: #e8ecfd;\n  border: 1px solid #c3cdf7;\n  font-weight: 600;\n}\n"
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "tool_call",
@@ -42,9 +46,10 @@
           "call_id": "call_6063186eca8645469dd3dc83",
           "name": "Write",
           "input": {
-            "file_path": "/tmp/codez-live-claude-code-website-nVrMvJ/workspace/site/script.js",
+            "file_path": "${WORKSPACE}/site/script.js",
             "content": "document.getElementById(\"status\").textContent = \"ready\";\n"
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "usage",
@@ -69,33 +74,38 @@
               "upstream_inference_prompt_cost": 0.0005160008,
               "upstream_inference_completions_cost": 0.00012208
             }
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "tool_result",
           "t_ms": 7943,
           "call_id": "call_18e2496fe3f94b5cb9d67cf0",
           "is_error": false,
-          "output": "File created successfully at: /tmp/codez-live-claude-code-website-nVrMvJ/workspace/site/index.html (file state is current in your context — no need to Read it back)"
+          "output": "File created successfully at: ${WORKSPACE}/site/index.html (file state is current in your context — no need to Read it back)",
+          "lane": "main"
         },
         {
           "kind": "tool_result",
           "t_ms": 7943,
           "call_id": "call_cea94e14d6c343c1a67220c3",
           "is_error": false,
-          "output": "File created successfully at: /tmp/codez-live-claude-code-website-nVrMvJ/workspace/site/style.css (file state is current in your context — no need to Read it back)"
+          "output": "File created successfully at: ${WORKSPACE}/site/style.css (file state is current in your context — no need to Read it back)",
+          "lane": "main"
         },
         {
           "kind": "tool_result",
           "t_ms": 7943,
           "call_id": "call_6063186eca8645469dd3dc83",
           "is_error": false,
-          "output": "File created successfully at: /tmp/codez-live-claude-code-website-nVrMvJ/workspace/site/script.js (file state is current in your context — no need to Read it back)"
+          "output": "File created successfully at: ${WORKSPACE}/site/script.js (file state is current in your context — no need to Read it back)",
+          "lane": "main"
         },
         {
           "kind": "thinking",
           "t_ms": 20671,
-          "text": "Now run `ls site`."
+          "text": "Now run `ls site`.",
+          "lane": "main"
         },
         {
           "kind": "tool_call",
@@ -105,7 +115,8 @@
           "input": {
             "command": "ls site",
             "description": "List files in site directory"
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "usage",
@@ -128,26 +139,30 @@
             "cost_details": {
               "upstream_inference_cost": 0.0001451184,
               "upstream_inference_prompt_cost": 0.0001344784,
-              "upstream_inference_completions_cost": 0.00001064
+              "upstream_inference_completions_cost": 1.064e-05
             }
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "tool_result",
           "t_ms": 21217,
           "call_id": "call_aa61059572664f60958f8601",
           "is_error": false,
-          "output": "index.html\nscript.js\nstyle.css"
+          "output": "index.html\nscript.js\nstyle.css",
+          "lane": "main"
         },
         {
           "kind": "thinking",
           "t_ms": 25521,
-          "text": "All three files exist. End with the line WEBSITE DONE."
+          "text": "All three files exist. End with the line WEBSITE DONE.",
+          "lane": "main"
         },
         {
           "kind": "text",
           "t_ms": 25724,
-          "text": "All three files are in place: `site/index.html` (title \"CodeZ Live Test\", `#status` element, links to the stylesheet and script), `site/style.css` (basic layout and status pill styles), and `site/script.js` (sets `#status` text to \"ready\"). `ls site` confirms:\n\n```\nindex.html\nscript.js\nstyle.css\n```\n\nWEBSITE DONE"
+          "text": "All three files are in place: `site/index.html` (title \"CodeZ Live Test\", `#status` element, links to the stylesheet and script), `site/style.css` (basic layout and status pill styles), and `site/script.js` (sets `#status` text to \"ready\"). `ls site` confirms:\n\n```\nindex.html\nscript.js\nstyle.css\n```\n\nWEBSITE DONE",
+          "lane": "main"
         },
         {
           "kind": "usage",
@@ -165,18 +180,20 @@
             "server_tool_use": null,
             "service_tier": null,
             "speed": "standard",
-            "cost": 0.0000942312,
+            "cost": 9.42312e-05,
             "is_byok": false,
             "cost_details": {
-              "upstream_inference_cost": 0.0000942312,
-              "upstream_inference_prompt_cost": 0.0000659512,
-              "upstream_inference_completions_cost": 0.00002828
+              "upstream_inference_cost": 9.42312e-05,
+              "upstream_inference_prompt_cost": 6.59512e-05,
+              "upstream_inference_completions_cost": 2.828e-05
             }
-          }
+          },
+          "lane": "main"
         },
         {
           "kind": "end_response",
-          "t_ms": 26944
+          "t_ms": 26944,
+          "lane": "main"
         }
       ]
     }

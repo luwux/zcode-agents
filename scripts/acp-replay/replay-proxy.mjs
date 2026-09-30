@@ -194,7 +194,7 @@ function requestParams(body) {
 async function handleAnthropic(req, res, body) {
   const main = hasTools(body);
   const reply = main
-    ? cursor.advance(anthropicIsContinuation(body))
+    ? cursor.advance(anthropicIsContinuation(body), cursor.laneOf(body))
     : { events: [{ kind: "text", text: "Replay", delay_ms: 0 }], stop: "end_turn", side: true };
   const lastMessages = (body.messages ?? []).slice(-2).map((message) => ({
     role: message.role,

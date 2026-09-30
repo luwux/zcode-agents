@@ -26,7 +26,7 @@ const MODEL_EVENT_KINDS = new Set(["text", "thinking", "tool_call"]);
  * @returns {Array<Array<{segment: object[], stop: "tool_use"|"end_turn"}>>} segments per turn
  */
 export function buildSegments(fixture) {
-  return fixture.turns.map((turn) => {
+  return fixture.turns.map((turn, turnIndex) => {
     const segments = [];
     let current = [];
     let lastT = 0;
@@ -44,6 +44,7 @@ export function buildSegments(fixture) {
         continue;
       }
       if (!MODEL_EVENT_KINDS.has(event.kind)) continue;
+      if (event.t_ms !== undefined && event.t_ms < lastT) lastT = event.t_ms;
       const delay = Math.max(0, (event.t_ms ?? lastT) - lastT);
       lastT = event.t_ms ?? lastT;
       current.push({ ...event, delay_ms: delay });
@@ -61,7 +62,11 @@ export function buildSegments(fixture) {
         return;
       }
       carry = [];
-      merged.push({ events, stop: hasTool ? "tool_use" : "end_turn" });
+      merged.push({
+        events,
+        stop: hasTool ? "tool_use" : "end_turn",
+        ...(events[0]?.lane ? { lane: events[0].lane } : {}),
+      });
     });
     if (!merged.length)
       merged.push({
@@ -69,7 +74,10 @@ export function buildSegments(fixture) {
         stop: "end_turn",
       });
     // After the last tool results the CLI asks once more; close the turn with a short answer.
-    if (merged.at(-1).stop === "tool_use")
+    // Lane-tagged recordings continue the turn in later fixture turns (see ReplayCursor), so only
+    // their final turn gets the closing answer.
+    const closes = !fixture.lanes || turnIndex === fixture.turns.length - 1;
+    if (closes && merged.at(-1).stop === "tool_use")
       merged.push({
         events: [{ kind: "text", text: "Replay turn finished.", delay_ms: 0 }],
         stop: "end_turn",
@@ -78,15 +86,61 @@ export function buildSegments(fixture) {
   });
 }
 
-/** Cursor over turns/segments; `advance(isContinuation)` returns the next segment. */
+/** Text of the first user message, without Claude Code's `<system-reminder>` context blocks. */
+export function firstUserText(body) {
+  const first = (body.messages ?? []).find((message) => message?.role === "user");
+  const content = first?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : (content ?? [])
+          .filter((block) => block?.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, "").trim();
+}
+
+/** Cursor over turns/segments; `advance(isContinuation, lane)` returns the next segment. */
 export class ReplayCursor {
   constructor(fixture) {
     this.turns = buildSegments(fixture);
     this.turn = -1;
     this.segment = 0;
+    // 修复原因：录制夹具里主 Agent 与子代理的请求并发，按全局顺序分发会把子代理的回答发给主 Agent
+    // （主回合提前结束）。夹具带 lane 时按请求方各自排队。
+    this.lanes = fixture.lanes ? new Map() : null;
+    // A native subagent's requests all start with the prompt its parent passed to the Agent tool.
+    this.subagentPrompts = new Set(
+      fixture.turns
+        .filter((turn) => turn.events.find((event) => event.lane)?.lane === "sub")
+        .map((turn) => turn.user.text.trim()),
+    );
+    if (this.lanes)
+      for (const [turn, segments] of this.turns.entries())
+        for (const [segment, entry] of segments.entries()) {
+          const lane = entry.lane ?? "main";
+          if (!this.lanes.has(lane)) this.lanes.set(lane, []);
+          this.lanes.get(lane).push({ turn, segment, ...entry });
+        }
   }
 
-  advance(isContinuation) {
+  /** Lane of a request: `sub` when it belongs to a recorded native subagent. */
+  laneOf(body) {
+    return this.subagentPrompts.has(firstUserText(body)) ? "sub" : "main";
+  }
+
+  advance(isContinuation, lane = "main") {
+    if (this.lanes) {
+      const next = this.lanes.get(lane)?.shift();
+      if (next) return { exhausted: false, ...next };
+      return {
+        turn: -1,
+        segment: -1,
+        exhausted: true,
+        events: [{ kind: "text", text: "Replay fixture exhausted.", delay_ms: 0 }],
+        stop: "end_turn",
+      };
+    }
     if (!isContinuation || this.turn < 0) {
       this.turn += 1;
       this.segment = 0;

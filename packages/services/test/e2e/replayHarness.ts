@@ -17,7 +17,7 @@ export async function startProxy(
   fixture: string,
   workspace: string,
   log: string,
-  timing: { speed?: number; maxDelayMs?: number } = {},
+  timing: { speed?: number; maxDelayMs?: number; tps?: number } = {},
 ) {
   const child = spawn(
     process.execPath,
@@ -32,6 +32,7 @@ export async function startProxy(
       "--speed",
       String(timing.speed ?? 50),
       ...(timing.maxDelayMs === undefined ? [] : ["--max-delay-ms", String(timing.maxDelayMs)]),
+      ...(timing.tps === undefined ? [] : ["--tps", String(timing.tps)]),
     ],
     { stdio: ["ignore", "pipe", "inherit"] },
   );
