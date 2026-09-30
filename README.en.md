@@ -206,6 +206,10 @@ Open `http://127.0.0.1:3030` to validate the complete flow, with one backend ser
 | `apps/zcode-cli`                                     | Agent CLI, TUI, runtime, and tools                                                      |
 | `scripts`, `config`, `third-party`                   | Build and maintenance scripts, built-in configuration, and third-party notice materials |
 
+## About This Fork
+
+This repository is a fork of [chent1024/codez](https://github.com/chent1024/codez) (itself derived from [zai-org/ZCode](https://github.com/zai-org/ZCode)). It adds built-in Claude Code, Codex and Pi ACP runtimes that can be used with an API key, a subscription sign-in or your existing CLI login; see [docs/acp-runtimes.md](docs/acp-runtimes.md). This fork is not affiliated with or endorsed by the upstream maintainers, Zhipu / Z.ai, Anthropic or OpenAI; the community links above belong to the upstream project. Section 5 of [NOTICE.md](NOTICE.md) lists the modifications and the licenses of the third-party runtimes, which are downloaded on first use and not redistributed here.
+
 ## Project Notice
 
 See [NOTICE.md](NOTICE.md) for feature and promotion scope, maintenance policy, execution and data risks, licensing, and third-party copyright information.

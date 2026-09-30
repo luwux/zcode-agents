@@ -218,6 +218,10 @@ node dist/zcode/debug/zcode/bin/zcode.mjs --web \
 | `apps/zcode-cli`                                     | Agent CLI、TUI、运行时与工具               |
 | `scripts`、`config`、`third-party`                   | 构建维护脚本、内置配置与第三方声明材料     |
 
+## 关于本分支
+
+本仓库派生自 [chent1024/codez](https://github.com/chent1024/codez)（其上游为 [zai-org/ZCode](https://github.com/zai-org/ZCode)），在其基础上内置了 Claude Code、Codex 与 Pi 三个 ACP 运行时，可用 API Key、订阅登录或本机 CLI 登录使用它们。详见 [docs/acp-runtimes.md](docs/acp-runtimes.md)。本分支与上游项目维护者、智谱 / Z.ai、Anthropic、OpenAI 均无隶属或背书关系；上方社群链接属于上游项目。修改范围与第三方运行时的许可见 [NOTICE.md](NOTICE.md) 第五节。
+
 ## 项目声明
 
 功能与优惠范围、维护规则、执行与数据风险，以及许可和第三方版权说明，详见 [NOTICE.md](NOTICE.md)。

@@ -68,3 +68,26 @@ AI 生成的代码、命令、解释、文件和建议可能存在错误、遗�
 ## 四、第三方许可与版权声明
 
 本仓库第一方代码依照根 [LICENSE](LICENSE) 采用 Apache-2.0；该许可不替其他权利人新增授权，也不覆盖第三方软件、复制代码、原生二进制、字体、图标、网页素材及其他资源的独立条款。具体依赖包详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。受第三方版权、许可及再分发条件等约束，不承诺提供官方产品的全部功能及活动政策，具体以实际发布的源码和构建产物为准。
+
+## 五、本分支的修改与内置 ACP 运行时
+
+本仓库是 [chent1024/codez](https://github.com/chent1024/codez) 的分支，后者派生自 [zai-org/ZCode](https://github.com/zai-org/ZCode)；上游代码依照 Apache-2.0 使用，原版权声明与许可文本保留不变。本分支与智谱 / Z.ai、Anthropic、OpenAI 及上述上游项目的维护者均无隶属或背书关系；文中出现的产品名称和商标归各自权利人所有，仅用于说明兼容对象。
+
+**本分支的主要修改**（依照 Apache-2.0 第 4(b) 条说明，逐项变更以 Git 历史为准）：
+
+- 内置 Claude Code、Codex 与 Pi 三个 ACP 运行时：首次使用时下载安装，按配置隔离数据目录与登录状态，支持 API Key（BYOK）、订阅登录与复用本机 CLI 登录；
+- ACP 会话的模型、思考档位、会话模式、权限确认、子代理、中途引导、粘贴图片等与原生会话统一的呈现；
+- 回放测试、桌面 CDP 端到端测试与使用真实模型的 GitHub Actions 测试；设计与规格见 [docs/acp-runtimes.md](docs/acp-runtimes.md) 与 `openspec/`。
+
+**内置运行时的第三方软件**不随本仓库或安装包分发，而是在用户首次启用时从 npm 或其源码仓库下载到本机，并按各自条款使用：
+
+| 组件                                                                       | 来源                                                                  | 许可                                                                                                              |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Claude Code（`@anthropic-ai/claude-agent-sdk` 附带的 `claude` 可执行文件） | Anthropic                                                             | 专有软件，© Anthropic PBC，使用受 [Anthropic 法律协议](https://code.claude.com/docs/en/legal-and-compliance) 约束 |
+| `@agentclientprotocol/claude-agent-acp`                                    | Agent Client Protocol                                                 | Apache-2.0                                                                                                        |
+| Codex（`@openai/codex`）                                                   | OpenAI                                                                | Apache-2.0                                                                                                        |
+| `@agentclientprotocol/codex-acp`                                           | Agent Client Protocol                                                 | Apache-2.0                                                                                                        |
+| Pi（`@earendil-works/pi-coding-agent`）                                    | Earendil Works                                                        | MIT                                                                                                               |
+| `acp-extension-pi`                                                         | [LodyAI/acp-extension-pi](https://github.com/LodyAI/acp-extension-pi) | Apache-2.0                                                                                                        |
+
+**账号与订阅**：选择订阅登录或复用本机 CLI 登录时，登录由上述官方程序自身完成，CodeZ 不读取、保存或转发 Claude / ChatGPT 的订阅令牌；复用本机 CLI 登录时会与本机 CLI 共用其全局配置目录（如 `~/.claude`、`~/.codex`）。使用订阅须遵守对应服务商的使用条款，是否允许在第三方界面中使用由服务商决定，用户需自行确认。Pi 仅提供 API Key 方式。API Key 加密保存在本机，请求直接发往用户选择的提供商或端点，费用由用户自行承担。
