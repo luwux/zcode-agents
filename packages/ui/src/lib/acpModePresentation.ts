@@ -1,10 +1,9 @@
 /**
- * ACP Agent 会话模式 → CodeZ 统一的权限模式类别。
+ * ACP Agent 会话模式 → CodeZ 模式类别，只决定图标与完全访问的警示色。
  *
- * 各 Agent 自带的模式名称各不相同（Claude “Manual / Accept edits / Auto / Bypass permissions”，
- * Codex “Ask for approval / Approve for me / Full access”），直接展示会让同一个选择器在不同 Agent 下
- * 长得完全不一样。这里按 ACP `_meta.kind` 与已知 id 归入 CodeZ 的类别，由 UI 复用原生模式的图标、
- * 文案与说明；无法识别的模式保留 Agent 原文。
+ * 模式名称与说明始终使用 Agent 原文（Claude “Manual / Accept edits / Bypass permissions”，
+ * Codex “Ask for approval / Approve for me / Full access”），不改名、不翻译；
+ * 类别按 ACP `_meta.kind` 与已知 id 判断，无法识别的归为 custom。
  */
 export type AcpModeCategory = "plan" | "build" | "edit" | "autoReview" | "yolo" | "custom";
 
@@ -14,22 +13,6 @@ export interface AcpModeInfo {
   description?: string;
   kind?: string;
 }
-
-export interface AcpModePresentation {
-  mode: AcpModeInfo;
-  category: AcpModeCategory;
-  /** 同一类别出现多次时只有第一个使用统一文案，其余保留 Agent 原文以便区分。 */
-  useAgentText: boolean;
-}
-
-const CATEGORY_ORDER: readonly AcpModeCategory[] = [
-  "plan",
-  "build",
-  "edit",
-  "autoReview",
-  "yolo",
-  "custom",
-];
 
 const FULL_ACCESS_IDS = new Set([
   "bypasspermissions",
@@ -52,17 +35,4 @@ export function classifyAcpMode(mode: Pick<AcpModeInfo, "id" | "kind">): AcpMode
   if (EDIT_IDS.has(id)) return "edit";
   if (ASK_IDS.has(id)) return "build";
   return "custom";
-}
-
-/** 按 CodeZ 的模式顺序排列，并标记重复类别。 */
-export function presentAcpModes(modes: readonly AcpModeInfo[]): AcpModePresentation[] {
-  const seen = new Set<AcpModeCategory>();
-  return modes
-    .map((mode) => ({ mode, category: classifyAcpMode(mode) }))
-    .sort((a, b) => CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category))
-    .map(({ mode, category }) => {
-      const useAgentText = category === "custom" || seen.has(category);
-      seen.add(category);
-      return { mode, category, useAgentText };
-    });
 }

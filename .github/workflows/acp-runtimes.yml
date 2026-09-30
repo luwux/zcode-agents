@@ -76,8 +76,8 @@ jobs:
     name: Live BYOK tasks (OpenRouter, MiMo v2.6 Flash)
     runs-on: ubuntu-24.04
     timeout-minutes: 100
-    # Paid: run on branch pushes and manual dispatch only, not again for the pull_request event.
-    if: github.event_name != 'pull_request'
+    # Paid (real OpenRouter usage): only on a manual dispatch from the Actions tab, never on push or PRs.
+    if: github.event_name == 'workflow_dispatch'
     # The key is exposed only to the three steps that need it (never to install or third-party steps).
     steps:
       - uses: actions/checkout@v4
@@ -164,24 +164,24 @@ jobs:
       - name: CDP e2e against the replay proxy (loopback-only)
         run: node scripts/acp-cdp/run-cdp-e2e.mjs --runtimes-cache ~/.cache/codez-acp-runtimes --artifacts artifacts/cdp-replay
       - name: OpenRouter usage before
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch'
         id: before
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
       - name: CDP e2e against OpenRouter (MiMo v2.6 Flash)
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node scripts/acp-cdp/run-cdp-e2e.mjs --mode live --no-build --no-install --runtimes-cache ~/.cache/codez-acp-runtimes --artifacts artifacts/cdp-live
       - name: OpenRouter usage after
-        if: always() && github.event_name != 'pull_request'
+        if: always() && github.event_name == 'workflow_dispatch'
         id: after
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: echo "usage=$(node scripts/acp-runtimes/openrouter-usage.mjs)" >> "$GITHUB_OUTPUT"
       - name: Cost summary
-        if: always() && github.event_name != 'pull_request'
+        if: always() && github.event_name == 'workflow_dispatch'
         env:
           BEFORE: ${{ steps.before.outputs.usage }}
           AFTER: ${{ steps.after.outputs.usage }}

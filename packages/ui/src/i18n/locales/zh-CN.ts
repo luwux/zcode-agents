@@ -5786,8 +5786,6 @@ const zhCN: Record<string, string> = {
   "mode.description.glm.edit": "自动编辑文件。",
   "mode.description.glm.plan": "编辑前先出计划。",
   "mode.description.glm.yolo": "减少确认次数。",
-  "mode.label.acp.autoReview": "自动审批",
-  "mode.description.acp.autoReview": "由 Agent 的模型批准安全操作，有风险时再问我。",
   "todo.panel.title": "待办",
   "todo.panel.currentTask": "当前任务",
   "todo.panel.completed": "todo 已完成",
