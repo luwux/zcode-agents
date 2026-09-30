@@ -1,17 +1,23 @@
 import { ACP_DEFAULT_MODEL_ID, type AgentRuntimeId, type ZCodeTaskMeta } from "@zcode/shared";
 import { getZCodeDataRootDir } from "#src/paths.js";
+import { createServiceLogger } from "#src/logger/serviceLogger.js";
 import { AcpConnection, type AcpSessionObserver } from "#src/agent-runtime/acpConnection.js";
 import { AcpConversationProjection } from "#src/agent-runtime/acpConversationProjection.js";
 import {
+  createAcpPendingInteractions,
   createManagedAcpSession,
+  type AcpPendingInteractions,
   type ManagedAcpSession,
-  type PendingPermission,
 } from "#src/agent-runtime/acpManagedSession.js";
 import {
   isolateAcpNativeAutoMemory,
   type AcpRuntimeSpec,
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import { AcpTranscriptStore } from "#src/agent-runtime/acpTranscriptStore.js";
+import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
+
+const logger = createServiceLogger("acp-session-creation");
 
 /** 建立 ACP 原生会话、持久绑定和工作台投影；失败时回收进程。 */
 export async function createAcpManagedSession(input: {
@@ -26,13 +32,15 @@ export async function createAcpManagedSession(input: {
   projectWorkspacePath?: string;
   parentTaskId?: string;
   spec: AcpRuntimeSpec;
-  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<{ executable: string; args: readonly string[] }>;
+  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<AcpLaunch>;
   isMemoryEnabled: () => boolean | Promise<boolean>;
+  /** 握手完成后回调（记录 authMethods）；在 session/new 之前触发，失败时仍可用于认证提示。 */
+  onInitialized?: (connection: AcpConnection) => void;
   syncTaskMetaAtGroupedTop: (meta: ZCodeTaskMeta) => Promise<void>;
   makeObserver: (
     projection: AcpConversationProjection,
     transcript: AcpTranscriptStore,
-    pending: Map<string, PendingPermission>,
+    pending: AcpPendingInteractions,
     current: () => ManagedAcpSession | null,
   ) => AcpSessionObserver;
 }): Promise<ManagedAcpSession> {
@@ -42,25 +50,49 @@ export async function createAcpManagedSession(input: {
     input.taskId,
     getZCodeDataRootDir(),
   );
-  const pendingPermissions = new Map<string, PendingPermission>();
+  const pending = createAcpPendingInteractions();
   let managed: ManagedAcpSession | null = null;
-  const observer = input.makeObserver(projection, transcript, pendingPermissions, () => managed);
-  const { executable, args } = await input.resolveLaunch(input.spec);
-  const isolated = isolateAcpNativeAutoMemory(input.spec, process.env, args);
-  const connection = await AcpConnection.open(
-    {
-      executable,
-      args: isolated.args,
-      cwd: input.workspacePath,
-      env: isolated.env,
-      memory: { workspaceIdentity: input.workspaceIdentity, isEnabled: input.isMemoryEnabled },
-    },
-    observer,
-  );
+  const observer = input.makeObserver(projection, transcript, pending, () => managed);
+  const launch = await input.resolveLaunch(input.spec);
+  const isolated = isolateAcpNativeAutoMemory(input.spec, launch.env ?? process.env, launch.args);
+  // 闸门覆盖 spawn → initialize → session/new；模型/模式设置在已建立的会话上，不占名额。
+  const { connection, nativeSessionId } = await acpStartupGate.run(async () => {
+    const opened = await AcpConnection.open(
+      {
+        executable: launch.executable,
+        args: isolated.args,
+        cwd: input.workspacePath,
+        env: isolated.env,
+        memory: { workspaceIdentity: input.workspaceIdentity, isEnabled: input.isMemoryEnabled },
+      },
+      observer,
+    );
+    input.onInitialized?.(opened);
+    try {
+      return {
+        connection: opened,
+        nativeSessionId: await opened.createSession(input.workspacePath),
+      };
+    } catch (error) {
+      await opened.close();
+      throw error;
+    }
+  });
   try {
-    const nativeSessionId = await connection.createSession(input.workspacePath);
-    if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID)
-      await connection.setModel(input.modelId);
+    if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID) {
+      try {
+        await connection.setModel(input.modelId);
+      } catch (error) {
+        // 修复原因：Claude 适配器的模型列表来自本机 Claude CLI 的目录，不同机器/版本公布的选项 ID 不同，
+        // 输入框里缓存的选项可能不在本次会话的列表中。此时沿用 Agent 当前（默认）模型建会话，而不是让发送失败；
+        // BYOK 配置的默认槽位就是用户的第一个模型。其他错误照常抛出。
+        if (!(error instanceof Error) || error.message !== "ACP model is unavailable") throw error;
+        logger.warn("requested ACP model is not offered; keeping the agent's current model", {
+          runtimeId: input.runtimeId,
+          modelId: input.modelId,
+        });
+      }
+    }
     if (input.thoughtLevel) await connection.setThinkingLevel(input.thoughtLevel);
     if (input.modeId) await connection.setMode(input.modeId);
     projection.setModelOptions(connection.modelOptions());
@@ -95,7 +127,7 @@ export async function createAcpManagedSession(input: {
       projection,
       transcript,
       acceptedCommandIds: new Set(),
-      pendingPermissions,
+      pending,
     });
     return managed;
   } catch (error) {

@@ -1,0 +1,45 @@
+{
+  "source": "claude-code",
+  "wire": "anthropic-messages",
+  "model": "claude-opus-5",
+  "note": "Hand-written background Bash fixture: the command is moved to the background (AIR asyncTasks), the parent answers, and the task-notification follow-up is the next turn.",
+  "turns": [
+    {
+      "user": { "text": "Run the slow check in the background.", "t_ms": 0 },
+      "events": [
+        {
+          "kind": "tool_call",
+          "t_ms": 10,
+          "message_id": "msg_bg_1",
+          "call_id": "toolu_bg_01",
+          "name": "Bash",
+          "input": { "command": "sleep 1", "description": "Slow check", "run_in_background": true }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 20,
+          "call_id": "toolu_bg_01",
+          "is_error": false,
+          "output": ""
+        },
+        {
+          "kind": "text",
+          "t_ms": 30,
+          "message_id": "msg_bg_2",
+          "text": "The check is running in the background."
+        }
+      ]
+    },
+    {
+      "user": { "text": "<task-notification>", "t_ms": 0 },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "message_id": "msg_bg_3",
+          "text": "The background check finished."
+        }
+      ]
+    }
+  ]
+}

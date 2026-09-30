@@ -1,0 +1,38 @@
+{
+  "source": "claude-code",
+  "wire": "anthropic-messages",
+  "model": "claude-opus-5",
+  "note": "Hand-written permission fixture: one Bash call that writes a marker file inside the throwaway workspace, so the default permission mode must ask.",
+  "turns": [
+    {
+      "user": { "text": "Create the marker file.", "t_ms": 0 },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "message_id": "msg_perm_1",
+          "text": "Creating the marker file."
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 20,
+          "message_id": "msg_perm_1",
+          "call_id": "toolu_perm_01",
+          "name": "Bash",
+          "input": {
+            "command": "touch replay-permission-marker.txt",
+            "description": "Create marker file"
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 30,
+          "call_id": "toolu_perm_01",
+          "is_error": false,
+          "output": ""
+        },
+        { "kind": "text", "t_ms": 40, "message_id": "msg_perm_2", "text": "Marker file created." }
+      ]
+    }
+  ]
+}

@@ -1,15 +1,20 @@
 import {
   conversationSnapshotSchema,
+  type BackgroundWorkSummary,
   type ConversationRow,
   type ConversationSnapshot,
+  type GoalState,
   type PendingInteraction,
   type PlanState,
+  type SubagentProjectionState,
 } from "@zcode/shared/zcode-protocol-v4";
 import type { AgentRuntimeId } from "@zcode/shared";
 import type { SessionModeState } from "@agentclientprotocol/sdk";
+import { toAcpModeOption } from "#src/agent-runtime/acpModeOption.js";
 
 const HISTORY_WINDOW_ROWS = 60;
 const UNSUPPORTED = { allowed: false as const, reasonCode: "acpCapabilityUnsupported" };
+const READ_ONLY = { allowed: false as const, reasonCode: "acpSubagentReadOnly" };
 
 /** 将 ACP 持有的只读状态映射到现有 V4 会话视图。 */
 export function buildAcpProjectionSnapshot(input: {
@@ -27,7 +32,14 @@ export function buildAcpProjectionSnapshot(input: {
   modes?: SessionModeState | null;
   permissions: PendingInteraction[];
   plan: PlanState | null;
+  goal?: GoalState | null;
   rows: ConversationRow[];
+  /** 子智能体虚拟会话：只读，不接纳输入与配置命令。 */
+  readOnly?: boolean;
+  /** Agent 支持运行中 steering（_session/steering 或 _lody/session/steer）。 */
+  steering?: boolean;
+  backgroundWorks?: BackgroundWorkSummary[];
+  subagents?: SubagentProjectionState;
   unavailableReason?: string | null;
   lastError?: {
     code: string;
@@ -38,6 +50,7 @@ export function buildAcpProjectionSnapshot(input: {
   } | null;
 }): ConversationSnapshot {
   const { phase } = input;
+  const readOnly = input.readOnly === true;
   return conversationSnapshotSchema.parse({
     protocolVersion: 1,
     sessionId: input.taskId,
@@ -47,8 +60,8 @@ export function buildAcpProjectionSnapshot(input: {
     control: {
       phase,
       sessionEnded: phase !== "draft" && phase !== "running",
-      canStop: phase === "running",
-      stopState: phase === "running" ? "stoppable" : "idle",
+      canStop: phase === "running" && !readOnly,
+      stopState: phase === "running" && !readOnly ? "stoppable" : "idle",
       stopTargetKind: phase === "running" ? "assistant" : "unknown",
       activeWorks: [],
       lastError: input.unavailableReason
@@ -65,12 +78,11 @@ export function buildAcpProjectionSnapshot(input: {
     availability: {
       fork: UNSUPPORTED,
       compact: UNSUPPORTED,
-      switchModelConfig:
-        phase === "running" || input.unavailableReason
-          ? {
-              allowed: false,
-              reasonCode: input.unavailableReason ? "acpRuntimeUnavailable" : "acpTurnRunning",
-            }
+      // 运行中也允许切换模型/思考等级：Host 立即转发，Agent 拒绝时在本 turn 结束后应用。
+      switchModelConfig: readOnly
+        ? READ_ONLY
+        : input.unavailableReason
+          ? { allowed: false, reasonCode: "acpRuntimeUnavailable" }
           : { allowed: true },
       setFollowupMode: UNSUPPORTED,
       queueEdit: UNSUPPORTED,
@@ -78,11 +90,15 @@ export function buildAcpProjectionSnapshot(input: {
       pauseGoal: UNSUPPORTED,
       resumeGoal: UNSUPPORTED,
     },
-    inputRouting: input.unavailableReason
-      ? { mode: "reject", reasonCode: "acpRuntimeUnavailable" }
-      : phase === "running"
-        ? { mode: "reject", reasonCode: "acpTurnRunning" }
-        : { mode: "startNow" },
+    inputRouting: readOnly
+      ? { mode: "reject", reasonCode: "acpSubagentReadOnly" }
+      : input.unavailableReason
+        ? { mode: "reject", reasonCode: "acpRuntimeUnavailable" }
+        : phase === "running"
+          ? input.steering
+            ? { mode: "guide" }
+            : { mode: "reject", reasonCode: "acpTurnRunning" }
+          : { mode: "startNow" },
     meta: {
       title: input.title,
       titleSource: "default",
@@ -105,11 +121,7 @@ export function buildAcpProjectionSnapshot(input: {
       acpModelOptions: input.modelOptions,
       ...(input.modes
         ? {
-            acpModeOptions: input.modes.availableModes.map(({ id, name, description }) => ({
-              id,
-              name,
-              ...(description ? { description } : {}),
-            })),
+            acpModeOptions: input.modes.availableModes.map(toAcpModeOption),
             acpModeId: input.modes.currentModeId,
           }
         : {}),
@@ -124,9 +136,9 @@ export function buildAcpProjectionSnapshot(input: {
     queue: { items: [], autoDrain: true },
     pendingInteractions: input.permissions,
     pendingCommands: [],
-    backgroundWorks: [],
-    subagents: { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
-    goal: null,
+    backgroundWorks: input.backgroundWorks ?? [],
+    subagents: input.subagents ?? { revision: 0, childSessionIds: [], running: [], endedTotal: 0 },
+    goal: input.goal ?? null,
     plan: input.plan,
     workspaceHookAdmission: null,
     rows: {

@@ -12,6 +12,7 @@
 // 远端（SSH/WSL/Docker）没有 Electron，仍走 prepare:remote-assets 的原生二进制，互不影响。
 
 import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { access, cp, mkdir } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -160,6 +161,12 @@ const localOfficialPluginSource =
   process.env.CODEZ_OFFICIAL_PLUGIN_SOURCE ||
   (process.platform === "darwin" ? "/Applications/ZCode.app/Contents/Resources/glm/packages" : "");
 
+// 修复原因：官方 ZCode 3.14.3 的安装包只带 browser-use-plugin / node-repl-host / bundled-skills，
+// documents、pdf、zcode-cua 等闭源插件既不在开源仓库也不在新版安装包里，按旧规则会让本机打包直接失败。
+// 运行时 seed（bootstrap bundled-plugins.ts 的 resolveFilesystemPluginRoot）找不到插件目录时本就跳过，
+// 因此缺失的闭源插件只告警并跳过；需要严格校验时设置 CODEZ_REQUIRE_OFFICIAL_PLUGINS=1。
+const requireAllOfficialPlugins = process.env.CODEZ_REQUIRE_OFFICIAL_PLUGINS === "1";
+
 function resolveOfficialPluginSource(plugin) {
   const repositoryPath = resolve(repoRoot, plugin.relativePath);
   if (existsSync(resolve(repositoryPath, ".zcode-plugin", "plugin.json"))) {
@@ -171,10 +178,25 @@ function resolveOfficialPluginSource(plugin) {
   if (sourcePath && existsSync(resolve(sourcePath, ".zcode-plugin", "plugin.json"))) {
     return sourcePath;
   }
-  throw new Error(
-    `[prepare:agent-bundle] missing ${plugin.stagedPath}; set CODEZ_OFFICIAL_PLUGIN_SOURCE to a locally installed plugin packages directory`,
-  );
+  const message = `[prepare:agent-bundle] missing ${plugin.stagedPath}; set CODEZ_OFFICIAL_PLUGIN_SOURCE to a locally installed plugin packages directory`;
+  // 仓库内有运行时产物要求的插件（node-repl-host 等）缺失说明构建本身有问题，始终报错。
+  if (requireAllOfficialPlugins || plugin.requiresRuntime) throw new Error(message);
+  console.warn(`${message} (skipped: not shipped by the installed ZCode release)`);
+  return null;
 }
+// 随 CLI 内置的技能包（不是插件）：bootstrap 的 resolveBundledSkillRoots 沿官方插件同款候选目录
+// 在 zcode.cjs 旁找 packages/bundled-skills 并原地读取。漏 stage 它，桌面包的 /workflow 会展开成
+// 「先加载 dynamic-workflows 技能」而技能文件不存在，因此必须随 Agent 一起打包。
+const bundledSkillPack = {
+  relativePath: "apps/zcode-cli/packages/bundled-skills",
+  requiredPaths: [
+    "skills/dynamic-workflows/SKILL.md",
+    "skills/dynamic-workflows/patterns.md",
+    "skills/dynamic-workflows/examples.md",
+  ],
+  stagedPath: "packages/bundled-skills",
+  topLevelPaths: ["skills"],
+};
 const includedOfficialPluginTopLevelPaths = new Set([
   ".mcp.json",
   ".zcode-plugin",
@@ -288,6 +310,7 @@ function stageOfficialPlugins() {
   for (const plugin of officialPluginPackages) {
     // 仅在本机打包时读取已有安装资产；受限插件文件不进入 Git，也不读取其用户配置。
     const sourceRoot = resolveOfficialPluginSource(plugin);
+    if (!sourceRoot) continue;
     const manifestPath = resolve(sourceRoot, ".zcode-plugin", "plugin.json");
     if (!existsSync(manifestPath)) {
       throw new Error(`[prepare:agent-bundle] missing official plugin manifest: ${manifestPath}`);
@@ -315,6 +338,24 @@ function stageOfficialPlugins() {
   }
 }
 
+async function stageBundledSkillPack() {
+  const sourceRoot = resolve(repoRoot, bundledSkillPack.relativePath);
+  const targetRoot = resolve(glmDir, bundledSkillPack.stagedPath);
+  await mkdir(targetRoot, { recursive: true });
+  for (const entryName of bundledSkillPack.topLevelPaths) {
+    const sourcePath = resolve(sourceRoot, entryName);
+    await cp(sourcePath, resolve(targetRoot, entryName), {
+      recursive: true,
+      filter: shouldCopyOfficialPluginAsset,
+    });
+  }
+  for (const relativePath of bundledSkillPack.requiredPaths) {
+    const stagedAssetPath = resolve(targetRoot, ...relativePath.split("/"));
+    await access(stagedAssetPath);
+  }
+  console.log(`[prepare:agent-bundle] staged bundled skill pack ${bundledSkillPack.stagedPath}`);
+}
+
 // Electron 生产包只带 resources/glm/zcode.cjs 时，app-server 进程的
 // __dirname 附近没有官方插件目录，启动时 seed 找不到 source，用户侧不会自动得到内置插件。
 // 这里把官方插件按 bootstrap 的 rootCandidates 期望放到 glm/packages/*-plugin，
@@ -325,3 +366,4 @@ buildCliBundle();
 buildOfficialPluginRuntimes();
 stageBundle();
 stageOfficialPlugins();
+await stageBundledSkillPack();

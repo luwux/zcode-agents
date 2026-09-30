@@ -2,15 +2,18 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, realpath, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import type { ContentBlock, PromptResponse, SessionNotification } from "@agentclientprotocol/sdk";
+import type { ContentBlock, PromptResponse } from "@agentclientprotocol/sdk";
+import type { AcpSessionUpdate } from "#src/agent-runtime/acpExtensionSchemas.js";
 import { getZCodeDataRootDir } from "#src/paths.js";
 
 const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 const TRANSCRIPT_VERSION = 1;
 
 export type AcpTranscriptEntry =
-  | { v: 1; kind: "prompt"; at: number; commandId: string; content: ContentBlock[] }
-  | { v: 1; kind: "update"; at: number; update: SessionNotification["update"] }
+  // steer：运行中经 steering 注入当前 turn 的输入；回放时进入当时的 turn，而不是开新 turn。
+  | { v: 1; kind: "prompt"; at: number; commandId: string; content: ContentBlock[]; steer?: true }
+  // sessionId 仅在更新来自已宣告的原生子会话时写入；缺省（含旧转录）即根会话。
+  | { v: 1; kind: "update"; at: number; update: AcpSessionUpdate; sessionId?: string }
   | { v: 1; kind: "turnEnd"; at: number; result: PromptResponse | { error: string } };
 
 function pathDigest(value: string): string {
@@ -54,12 +57,32 @@ export class AcpTranscriptStore {
     }
   }
 
-  appendPrompt(commandId: string, content: ContentBlock[]): Promise<void> {
-    return this.enqueue({ v: 1, kind: "prompt", at: Date.now(), commandId, content });
+  appendPrompt(
+    commandId: string,
+    content: ContentBlock[],
+    options: { steer?: boolean } = {},
+  ): Promise<void> {
+    return this.enqueue({
+      v: 1,
+      kind: "prompt",
+      at: Date.now(),
+      commandId,
+      content,
+      ...(options.steer ? { steer: true as const } : {}),
+    });
   }
 
-  appendUpdate(update: SessionNotification["update"]): Promise<void> {
-    return this.enqueue({ v: 1, kind: "update", at: Date.now(), update });
+  appendUpdate(
+    update: AcpSessionUpdate,
+    options: { sessionId?: string; at?: number } = {},
+  ): Promise<void> {
+    return this.enqueue({
+      v: 1,
+      kind: "update",
+      at: options.at ?? Date.now(),
+      update,
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+    });
   }
 
   appendTurnEnd(result: PromptResponse | { error: string }): Promise<void> {

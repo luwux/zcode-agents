@@ -9,6 +9,8 @@ export function ApiKeyInput({
   value,
   visible,
   readOnly,
+  placeholder,
+  testId = TID_MODEL_PROVIDER_API_KEY_INPUT,
   onChange,
   onBlur,
   onKeyDown,
@@ -19,6 +21,9 @@ export function ApiKeyInput({
   value: string;
   visible: boolean;
   readOnly?: boolean;
+  /** 只写字段（如内置 ACP 配置已保存的 Key）用占位说明代替回显。 */
+  placeholder?: string;
+  testId?: string;
   onChange: (value: string) => void;
   onBlur: () => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
@@ -34,11 +39,14 @@ export function ApiKeyInput({
         {...TECHNICAL_INPUT_ATTRIBUTES}
         type={visible && !readOnly ? "text" : "password"}
         size="lg"
-        data-testid={TID_MODEL_PROVIDER_API_KEY_INPUT}
+        data-testid={testId}
         className="pr-10 h-9"
-        placeholder={intl.formatMessage({
-          id: "settings.modelProvider.apiKeyPlaceholder",
-        })}
+        placeholder={
+          placeholder ??
+          intl.formatMessage({
+            id: "settings.modelProvider.apiKeyPlaceholder",
+          })
+        }
         value={value}
         readOnly={readOnly}
         disabled={readOnly}
@@ -57,6 +65,9 @@ export function ApiKeyInput({
         variant="ghost"
         size="icon-sm"
         disabled={readOnly}
+        aria-label={intl.formatMessage({
+          id: visible ? "settings.modelProvider.hideApiKey" : "settings.modelProvider.showApiKey",
+        })}
         className="absolute top-1/2 right-1.5 -translate-y-1/2"
         onClick={onToggleVisibility}
       >

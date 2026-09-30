@@ -205,7 +205,8 @@ test("ACP saves confirmed mode and reapplies it before restoring a historical ta
     await coordinator.closeAll();
     repo.close();
     setDataBaseDir(null);
-    await rm(dir, { recursive: true, force: true });
+    // 修复原因：已退出进程的转录尾写可能与递归删除并发，偶发 ENOTEMPTY；重试删除而不改断言。
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -336,7 +337,7 @@ test("ACP coordinator binds workbench identity, deduplicates and restores V4 his
     await coordinator.closeAll();
     repo.close();
     setDataBaseDir(null);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -476,7 +477,7 @@ test("ACP sends local images and files using declared prompt capabilities", asyn
     await coordinator.closeAll();
     repo.close();
     setDataBaseDir(null);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -560,7 +561,7 @@ test("a configured ACP Agent absent from the built-in catalog can create and res
     await coordinator.closeAll();
     repo.close();
     setDataBaseDir(null);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -639,6 +640,6 @@ test("ACP auxiliary conversation creates an isolated child and restores its bind
     await bridge.dispose();
     repo.close();
     setDataBaseDir(null);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

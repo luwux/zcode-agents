@@ -34,6 +34,10 @@ export interface AgentServerRegistrySnapshot {
 }
 
 const TRANSITIONAL_BUILTIN_IDS = new Set([
+  // 内置 Runtime 默认配置 ID（agent-configs.json 命名空间）。
+  "claude-code",
+  "codex",
+  "pi",
   "qoder-acp",
   "cline-acp",
   "codebuddy-acp",

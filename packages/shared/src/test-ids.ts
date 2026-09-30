@@ -462,6 +462,8 @@ export const TID_MODEL_PROVIDER_MODEL_INPUT = "model-provider-model-input";
 export const TID_MODEL_PROVIDER_MODEL_DELETE_BUTTON = "model-provider-model-delete-button";
 /** 模型供应商添加模型按钮 */
 export const TID_MODEL_PROVIDER_ADD_MODEL_BUTTON = "model-provider-add-model-button";
+/** 内置 ACP Runtime 设置控件（动态后缀为控件名，如 auth、preset、base-url、api-key、sign-in、model-<序号>） */
+export const TID_ACP_BUILTIN_CONTROL = "acp-builtin";
 
 // Chat Toolbar
 /** 聊天工具栏模型选择按钮 */

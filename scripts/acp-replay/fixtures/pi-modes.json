@@ -1,0 +1,72 @@
+{
+  "source": "pi",
+  "wire": "anthropic-messages",
+  "model": "replay-pi",
+  "note": "Hand-written permission-mode fixture: one file edit, one allowed command and one command the test judge denies, all inside the throwaway workspace (${WORKSPACE}). Used to compare bypass, accept-edits and ask modes.",
+  "turns": [
+    {
+      "user": {
+        "text": "Update the workspace as requested.",
+        "t_ms": 0
+      },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "text": "Writing the note."
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 20,
+          "call_id": "toolu_pimode_01",
+          "name": "write",
+          "input": {
+            "path": "${WORKSPACE}/judge-edit.txt",
+            "content": "edited by replay\n"
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 30,
+          "call_id": "toolu_pimode_01",
+          "output": ""
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 40,
+          "call_id": "toolu_pimode_02",
+          "name": "bash",
+          "input": {
+            "command": "touch judge-allowed.txt"
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 50,
+          "call_id": "toolu_pimode_02",
+          "output": ""
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 60,
+          "call_id": "toolu_pimode_03",
+          "name": "bash",
+          "input": {
+            "command": "touch judge-denied.txt"
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 70,
+          "call_id": "toolu_pimode_03",
+          "output": ""
+        },
+        {
+          "kind": "text",
+          "t_ms": 80,
+          "text": "Done."
+        }
+      ]
+    }
+  ]
+}

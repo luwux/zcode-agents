@@ -35,6 +35,26 @@ import { renderModelProviderNavIcon } from "./utils.js";
 // 侧栏会裁切水平溢出；排序只改变纵向位置，拖动时也必须保持 x=0。
 const restrictToVerticalAxis: Modifier = ({ transform }) => ({ ...transform, x: 0 });
 
+/** 供应商状态圆点；内置 ACP 配置按启停与 Host 报告的可用性展示，与自定义供应商一致。 */
+function NavItemStatusIndicator({ item }: { item: ModelProviderNavItem }) {
+  if ("provider" in item)
+    return (
+      <ProviderStatusIndicator
+        provider={item.type === "preset" ? item.statusProvider : item.provider}
+      />
+    );
+  if (item.type === "acp" && item.status.builtin)
+    return (
+      <ProviderStatusIndicator
+        provider={{
+          enabled: item.status.builtin.enabled,
+          executable: item.status.installed && !item.status.reason,
+        }}
+      />
+    );
+  return null;
+}
+
 function getSortableProviderId(
   item: ModelProviderNavItem,
   reorderableProviderIds?: ReadonlySet<string>,
@@ -127,11 +147,7 @@ function ModelProviderNavigationButton({
         <span className="flex min-w-0 flex-1 items-center gap-1.5 max-md:sr-only">
           <span className="min-w-0 truncate">{label}</span>
         </span>
-        {"provider" in item ? (
-          <ProviderStatusIndicator
-            provider={item.type === "preset" ? item.statusProvider : item.provider}
-          />
-        ) : null}
+        <NavItemStatusIndicator item={item} />
       </button>
     </ControlHintTooltip>
   );
@@ -207,11 +223,7 @@ function SortableModelProviderNavigationButton({
         <span className="flex min-w-0 flex-1 items-center gap-1.5 max-md:sr-only">
           <span className="min-w-0 truncate">{label}</span>
         </span>
-        {"provider" in item ? (
-          <ProviderStatusIndicator
-            provider={item.type === "preset" ? item.statusProvider : item.provider}
-          />
-        ) : null}
+        <NavItemStatusIndicator item={item} />
       </div>
     </ControlHintTooltip>
   );

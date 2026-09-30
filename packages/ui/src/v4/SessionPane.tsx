@@ -24,6 +24,7 @@ import {
   testId,
   ZCODE_AGENT_PROVIDER,
   isRemoteWorkspaceIdentity,
+  ACP_DRAFT_ATTACHMENT_SESSION_PREFIX,
 } from "@zcode/shared";
 import type {
   AgentRuntimeId,
@@ -1324,7 +1325,7 @@ export function SessionPane({
       : "zcode-cli";
   const isAcpRuntime = selectedRuntimeId !== "zcode-cli";
   const [acpModes, setAcpModes] = useState<
-    Array<{ id: string; name: string; description?: string }>
+    Array<{ id: string; name: string; description?: string; kind?: string }>
   >([]);
   const [acpSelectedMode, setAcpSelectedMode] = useState("");
   const [acpModeLoading, setAcpModeLoading] = useState(false);
@@ -2465,6 +2466,13 @@ export function SessionPane({
     async () => undefined,
   );
   const effectiveSessionId = sessionId ?? prewarmSessionId;
+  // 修复原因：ACP 运行时不走 CLI prewarm，原来直接给 composer 传 null 的附件会话，粘贴图片永远停在
+  // “等待会话”、发送按钮被禁用。草稿态改用本窗格稳定的 acp-draft- 临时 ID，Host 按前缀接收上传并
+  // 落盘为本地文件，发送时由 ACP prompt 读取该绝对路径生成 image 块。
+  const [acpDraftAttachmentSessionId] = useState(
+    () =>
+      `${ACP_DRAFT_ATTACHMENT_SESSION_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+  );
   const showModelChangeNotice = useCallback(
     (sourceModel: ModelSelectionSource | null, targetModel: ModelSelectionSource) => {
       // Bug 原因：草稿尚未形成实际会话，模型选择本身已经在 composer 中可见；
@@ -4811,7 +4819,9 @@ export function SessionPane({
         modelSelectionView={modelSelectionView}
         modelSelectionState={modelSelectionRead.state}
         modelSelectionReload={modelSelectionRead.reload}
-        attachmentSessionId={isAcpRuntime ? null : effectiveSessionId}
+        attachmentSessionId={
+          isAcpRuntime ? (sessionId ?? acpDraftAttachmentSessionId) : effectiveSessionId
+        }
         attachmentPut={attachmentPut}
         onRuntimeRestart={onRuntimeRestart}
         onRuntimeLifecycle={onRuntimeLifecycle}

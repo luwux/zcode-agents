@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { ArrowLeftIcon, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { AgentRuntimeInstallStatus } from "@zcode/services";
-import { ACP_DEFAULT_MODEL_ID } from "@zcode/shared";
+import { TID_ACP_BUILTIN_CONTROL, testId } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { Input } from "@/components/ui/input.js";
 import { Switch } from "@/components/ui/switch.js";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,14 +14,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
+import { useBuiltinAcpRuntimeCatalog } from "@/hooks/useBuiltinAcpRuntimes.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useServices } from "@/hooks/useServices.js";
 import { disambiguateAcpModelName, extractAcpBenefitBadge } from "@/lib/modelSelectionGroups.js";
+import { BuiltinAcpCreateForm } from "./BuiltinAcpCreateForm.js";
+import { BuiltinAcpProviderCard } from "./BuiltinAcpProviderCard.js";
+import { isBuiltinAcpStatus } from "./builtinAcpConfig.js";
+import { useAcpModelSync } from "./useAcpModelSync.js";
 
 export function AcpProviderDetail({
   status,
   configPath,
+  existingIds = [],
   onSaved,
+  onStatuses,
+  onRefresh,
   onDeleted,
   workspacePath,
   workspaceIdentity,
@@ -29,12 +38,145 @@ export function AcpProviderDetail({
 }: {
   status?: AgentRuntimeInstallStatus;
   configPath?: string;
+  /** 已占用的 ACP ID（内置配置、自定义 ACP Server），新增内置配置时用于前置校验。 */
+  existingIds?: readonly string[];
   onSaved?: (id: string) => void;
+  /** 内置配置写入后 Host 返回的最新状态列表。 */
+  onStatuses?: (statuses: AgentRuntimeInstallStatus[]) => void;
+  onRefresh?: () => Promise<void>;
   onDeleted?: (id: string) => void;
   workspacePath: string;
   workspaceIdentity?: string;
   create?: boolean;
   onBack?: () => void;
+}) {
+  const { intl } = useZCodeIntl();
+  const { catalog, error: catalogError } = useBuiltinAcpRuntimeCatalog();
+  const [createKind, setCreateKind] = useState<"custom" | "builtin">("custom");
+  const refresh = onRefresh ?? (async () => undefined);
+  const applyStatuses = onStatuses ?? (() => undefined);
+  const catalogMessage = catalogError
+    ? intl.formatMessage(
+        { id: "settings.modelProvider.builtinAcp.catalogUnavailable" },
+        { error: catalogError },
+      )
+    : null;
+
+  if (!create && isBuiltinAcpStatus(status)) {
+    return (
+      <section className="space-y-4" aria-label="ACP 供应商">
+        {catalog ? (
+          <BuiltinAcpProviderCard
+            status={status}
+            catalog={catalog}
+            workspacePath={workspacePath}
+            {...(workspaceIdentity ? { workspaceIdentity } : {})}
+            onStatuses={applyStatuses}
+            onRefresh={refresh}
+            onDeleted={() => onDeleted?.(status.id)}
+          />
+        ) : catalogMessage ? (
+          <p role="alert" className="text-ui-sm text-destructive">
+            {catalogMessage}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <section className="space-y-4" aria-label="ACP 供应商">
+      {create ? (
+        <>
+          <div className="flex min-w-0 items-center gap-2">
+            {onBack ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="返回"
+                onClick={onBack}
+              >
+                <ArrowLeftIcon className="size-4" aria-hidden="true" />
+              </Button>
+            ) : null}
+            <h2 className="truncate text-ui-lg font-semibold text-foreground">添加 ACP 供应商</h2>
+          </div>
+          {/* 规格 agent-runtime-selection：选择 ACP 后仍直接展示自定义命令表单；内置 Runtime 是同页的另一分段。 */}
+          <Tabs
+            value={createKind}
+            onValueChange={(value) => setCreateKind(value as "custom" | "builtin")}
+            className="gap-4"
+          >
+            <TabsList className="max-w-full">
+              <TabsTrigger value="custom">
+                {intl.formatMessage({ id: "settings.modelProvider.builtinAcp.createTab.custom" })}
+              </TabsTrigger>
+              <TabsTrigger
+                value="builtin"
+                data-testid={testId(TID_ACP_BUILTIN_CONTROL, "create-tab")}
+              >
+                {intl.formatMessage({ id: "settings.modelProvider.builtinAcp.createTab.builtin" })}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="custom">
+              <CustomAcpServerDetail
+                create
+                configPath={configPath}
+                workspacePath={workspacePath}
+                {...(workspaceIdentity ? { workspaceIdentity } : {})}
+                {...(onSaved ? { onSaved } : {})}
+              />
+            </TabsContent>
+            <TabsContent value="builtin">
+              {catalog ? (
+                <BuiltinAcpCreateForm
+                  catalog={catalog}
+                  existingIds={existingIds}
+                  onCreated={(id, statuses) => {
+                    applyStatuses(statuses);
+                    onSaved?.(id);
+                  }}
+                />
+              ) : catalogMessage ? (
+                <p role="alert" className="text-ui-sm text-destructive">
+                  {catalogMessage}
+                </p>
+              ) : null}
+            </TabsContent>
+          </Tabs>
+        </>
+      ) : (
+        <CustomAcpServerDetail
+          status={status}
+          configPath={configPath}
+          workspacePath={workspacePath}
+          {...(workspaceIdentity ? { workspaceIdentity } : {})}
+          {...(onSaved ? { onSaved } : {})}
+          {...(onDeleted ? { onDeleted } : {})}
+        />
+      )}
+    </section>
+  );
+}
+
+/** 自定义 ACP Server（agent-servers.json）：命令与参数的编辑、删除与模型同步。 */
+function CustomAcpServerDetail({
+  status,
+  configPath,
+  onSaved,
+  onDeleted,
+  workspacePath,
+  workspaceIdentity,
+  create = false,
+}: {
+  status?: AgentRuntimeInstallStatus;
+  configPath?: string;
+  onSaved?: (id: string) => void;
+  onDeleted?: (id: string) => void;
+  workspacePath: string;
+  workspaceIdentity?: string;
+  create?: boolean;
 }) {
   const { zcodeAgentService } = useServices();
   const confirmDialog = useConfirmDialog();
@@ -45,18 +187,16 @@ export function AcpProviderDetail({
   const [argsText, setArgsText] = useState(() => JSON.stringify(status?.args ?? []));
   const [editing, setEditing] = useState(create);
   const [saving, setSaving] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const toggleSavingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const [availableModels, setAvailableModels] = useState<Array<{
-    id: string;
-    name: string;
-    description?: string;
-  }> | null>(status?.availableModels ? [...status.availableModels] : null);
-  const [enabledModelIds, setEnabledModelIds] = useState(
-    () => new Set((status?.models ?? []).map((model) => model.id)),
-  );
+  const sync = useAcpModelSync({
+    status: status ?? { id: "", name: "", installed: false, command: "" },
+    workspacePath,
+    ...(workspaceIdentity ? { workspaceIdentity } : {}),
+    onSaved: () => (status ? onSaved?.(status.id) : undefined),
+  });
   const editable = create || (status?.configured === true && editing);
+  const busy = saving || sync.saving;
+  const shownError = error ?? sync.error;
 
   const cancelEdit = () => {
     setName(status?.name ?? "");
@@ -82,14 +222,12 @@ export function AcpProviderDetail({
     setSaving(true);
     try {
       await zcodeAgentService.saveAgentServer({ id, name, command, args });
+      // 命令身份改变后旧模型缓存失效；本地列表也不能继续显示旧 Agent 的模型。
       if (
         status &&
         (status.command !== command || JSON.stringify(status.args ?? []) !== JSON.stringify(args))
-      ) {
-        // 命令身份改变后旧模型缓存失效；本地列表也不能继续显示旧 Agent 的模型。
-        setAvailableModels([]);
-        setEnabledModelIds(new Set());
-      }
+      )
+        sync.reset();
       setEditing(false);
       onSaved?.(id);
     } catch (cause) {
@@ -100,7 +238,7 @@ export function AcpProviderDetail({
   };
 
   const deleteProvider = async () => {
-    if (!status?.configured || saving) return;
+    if (!status?.configured || busy) return;
     const confirmed = await confirmDialog({
       title: intl.formatMessage(
         { id: "settings.modelProvider.deleteConfirmTitle" },
@@ -123,82 +261,13 @@ export function AcpProviderDetail({
     }
   };
 
-  const syncModels = async () => {
-    if (!status || !workspacePath) return;
-    setSaving(true);
-    setSyncing(true);
-    setError(null);
-    try {
-      const preview = await zcodeAgentService.discoverAgentRuntimeConfig({
-        runtimeId: status.id,
-        workspacePath,
-        ...(workspaceIdentity ? { workspaceIdentity } : {}),
-        includeAllModelThoughtLevels: true,
-      });
-      const models = preview.models.length
-        ? preview.models
-        : [{ id: ACP_DEFAULT_MODEL_ID, name: "默认模型" }];
-      setAvailableModels(models);
-      setEnabledModelIds(
-        (current) =>
-          new Set(models.filter((model) => current.has(model.id)).map((model) => model.id)),
-      );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setSyncing(false);
-      setSaving(false);
-    }
-  };
-
-  const toggleModel = async (modelId: string, checked: boolean) => {
-    if (!status || toggleSavingRef.current) return;
-    toggleSavingRef.current = true;
-    const previous = enabledModelIds;
-    const next = new Set(previous);
-    if (checked) next.add(modelId);
-    else next.delete(modelId);
-    // 保存期间禁用其他开关，避免较晚完成的旧请求覆盖较新的选择。
-    setEnabledModelIds(next);
-    setSaving(true);
-    setError(null);
-    try {
-      await zcodeAgentService.saveAgentServerModels({
-        runtimeId: status.id,
-        workspacePath,
-        ...(workspaceIdentity ? { workspaceIdentity } : {}),
-        modelIds: [...next],
-      });
-      onSaved?.(status.id);
-    } catch (cause) {
-      setEnabledModelIds(previous);
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      toggleSavingRef.current = false;
-      setSaving(false);
-    }
-  };
-
   return (
-    <section className="space-y-4" aria-label="ACP 供应商">
-      <div>
+    <div className="space-y-4">
+      {create ? null : (
         <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            {create && onBack ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="返回"
-                onClick={onBack}
-              >
-                <ArrowLeftIcon className="size-4" aria-hidden="true" />
-              </Button>
-            ) : null}
-            <h2 className="truncate text-ui-lg font-semibold text-foreground">
-              {create ? "添加 ACP 供应商" : status?.name}
-            </h2>
-          </div>
+          <h2 className="min-w-0 truncate text-ui-lg font-semibold text-foreground">
+            {status?.name}
+          </h2>
           {status?.configured && !editing ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -207,7 +276,7 @@ export function AcpProviderDetail({
                   variant="ghost"
                   size="icon-sm"
                   aria-label={intl.formatMessage({ id: "common.more" })}
-                  disabled={saving}
+                  disabled={busy}
                 >
                   <MoreHorizontal className="size-4" />
                 </Button>
@@ -226,12 +295,13 @@ export function AcpProviderDetail({
             </DropdownMenu>
           ) : null}
         </div>
-        <p className="mt-1 text-ui-sm text-foreground-subtle">
-          ACP CLI 由执行 Agent 的 Host 启动；安装与认证由该 CLI 自己管理。
-        </p>
-      </div>
+      )}
+      <p className="text-ui-sm text-foreground-subtle">
+        ACP CLI 由执行 Agent 的 Host 启动；安装与认证由该 CLI 自己管理。
+      </p>
       <p className="break-all text-ui-sm text-foreground-subtle">
-        配置文件：{configPath ?? status?.configPath ?? "~/.codez/v2/agent-servers.json"}
+        {/* 修复原因：内置运行时配置保存在 agent-configs.json；列表首项的路径只适用于新建自定义 ACP Server。 */}
+        配置文件：{status?.configPath ?? configPath ?? "~/.codez/v2/agent-servers.json"}
       </p>
       {status ? (
         <div className="space-y-1 text-ui-sm">
@@ -261,18 +331,18 @@ export function AcpProviderDetail({
             参数（JSON 字符串数组）
             <Input value={argsText} onChange={(event) => setArgsText(event.target.value)} />
           </label>
-          {error ? (
+          {shownError ? (
             <p role="alert" className="text-ui-sm text-destructive">
-              {error}
+              {shownError}
             </p>
           ) : null}
           <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
             {!create ? (
-              <Button type="button" variant="outline" disabled={saving} onClick={cancelEdit}>
+              <Button type="button" variant="outline" disabled={busy} onClick={cancelEdit}>
                 {intl.formatMessage({ id: "common.cancel" })}
               </Button>
             ) : null}
-            <Button type="button" disabled={saving} onClick={() => void save()}>
+            <Button type="button" disabled={busy} onClick={() => void save()}>
               {saving ? "保存中…" : "保存 ACP 供应商"}
             </Button>
           </div>
@@ -282,17 +352,17 @@ export function AcpProviderDetail({
           <Button
             type="button"
             variant="outline"
-            disabled={!status.installed || saving || !workspacePath}
-            onClick={() => void syncModels()}
+            disabled={!status.installed || busy || !workspacePath}
+            onClick={() => void sync.sync()}
           >
-            {syncing ? "同步中…" : "同步 Agent 模型"}
+            {sync.syncing ? "同步中…" : "同步 Agent 模型"}
           </Button>
-          {availableModels === null && status.models?.length ? (
+          {sync.availableModels === null && status.models?.length ? (
             <p className="text-ui-sm text-foreground-subtle">
               已启用 {status.models.length} 个模型。同步后可重新勾选。
             </p>
           ) : null}
-          {availableModels?.map((model) => (
+          {sync.availableModels?.map((model) => (
             <label
               key={model.id}
               className="flex min-h-10 items-center justify-between gap-3 border-b border-border/60 px-1 py-2 text-ui-base last:border-b-0"
@@ -302,7 +372,7 @@ export function AcpProviderDetail({
                 title={[model.id, model.description].filter(Boolean).join(" · ")}
               >
                 <span className="break-words text-foreground">
-                  {disambiguateAcpModelName(model, availableModels)}
+                  {disambiguateAcpModelName(model, sync.availableModels!)}
                 </span>
                 {model.description && extractAcpBenefitBadge(model.description) ? (
                   <span className="ml-2 inline-flex rounded-md bg-surface px-1.5 py-0.5 text-ui-sm text-foreground-subtle ring-1 ring-border">
@@ -311,19 +381,19 @@ export function AcpProviderDetail({
                 ) : null}
               </span>
               <Switch
-                disabled={saving}
-                checked={enabledModelIds.has(model.id)}
-                onCheckedChange={(checked) => void toggleModel(model.id, checked)}
+                disabled={busy}
+                checked={sync.enabledModelIds.has(model.id)}
+                onCheckedChange={(checked) => void sync.toggle(model.id, checked)}
               />
             </label>
           ))}
-          {error ? (
+          {shownError ? (
             <p role="alert" className="text-ui-sm text-destructive">
-              {error}
+              {shownError}
             </p>
           ) : null}
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }

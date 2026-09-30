@@ -6,6 +6,9 @@ import {
   isolateAcpNativeAutoMemory,
   type AcpRuntimeSpec,
 } from "#src/agent-runtime/acpRuntimeCatalog.js";
+import { acpStartupGate } from "#src/agent-runtime/acpStartupGate.js";
+import { toAcpModeOption } from "#src/agent-runtime/acpModeOption.js";
+import type { AcpLaunch } from "#src/agent-runtime/builtin/builtinRuntimeLaunch.js";
 
 /** 草稿会话使用临时 ACP 进程读取模型与思考选项，不留下空会话绑定。 */
 export async function discoverAcpRuntimeConfig(input: {
@@ -13,21 +16,36 @@ export async function discoverAcpRuntimeConfig(input: {
   workspacePath: string;
   modelId?: string;
   includeAllModelThoughtLevels?: boolean;
-  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<{ executable: string; args: readonly string[] }>;
+  resolveLaunch: (spec: AcpRuntimeSpec) => Promise<AcpLaunch>;
+  onInitialized?: (connection: AcpConnection) => void;
 }): Promise<AgentRuntimeConfigPreview> {
   const spec = await resolveAcpRuntimeSpec(input.runtimeId);
   if (!spec) throw new Error(`Unsupported ACP Runtime ${input.runtimeId}`);
-  const { executable, args } = await input.resolveLaunch(spec);
-  const isolated = isolateAcpNativeAutoMemory(spec, process.env, args);
-  const connection = await AcpConnection.open(
-    { executable, args: isolated.args, cwd: input.workspacePath, env: isolated.env },
-    {
-      onUpdate: () => {},
-      requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-    },
-  );
+  const launch = await input.resolveLaunch(spec);
+  const isolated = isolateAcpNativeAutoMemory(spec, launch.env ?? process.env, launch.args);
+  const connection = await acpStartupGate.run(async () => {
+    const opened = await AcpConnection.open(
+      {
+        executable: launch.executable,
+        args: isolated.args,
+        cwd: input.workspacePath,
+        env: isolated.env,
+      },
+      {
+        onUpdate: () => {},
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      },
+    );
+    input.onInitialized?.(opened);
+    try {
+      await opened.createSession(input.workspacePath);
+      return opened;
+    } catch (error) {
+      await opened.close();
+      throw error;
+    }
+  });
   try {
-    await connection.createSession(input.workspacePath);
     if (input.modelId && input.modelId !== ACP_DEFAULT_MODEL_ID)
       await connection.setModel(input.modelId);
     const models = connection.modelOptions();
@@ -35,14 +53,28 @@ export async function discoverAcpRuntimeConfig(input: {
     const selectedModel = models.find((model) => model.selected)?.id ?? "";
     const modelThoughtLevels = new Map<string, Array<{ value: string; name: string }>>();
     if (input.includeAllModelThoughtLevels) {
-      for (const model of models) {
-        await connection.setModel(model.id);
+      if (selectedModel)
         modelThoughtLevels.set(
-          model.id,
-          connection.thinkingLevels().map(({ value, name }) => ({ value, name })),
+          selectedModel,
+          levels.map(({ value, name }) => ({ value, name })),
         );
+      for (const model of models) {
+        if (model.id === selectedModel) continue;
+        // 修复原因：codex-acp 只在自定义模型（BYOK 的 OpenRouter/MiMo 等不在其目录中的模型）为当前模型时
+        // 才列出它，切到预设模型后便无法切回；逐个探测时单个模型切换失败只让该模型的思考档位留空，
+        // 不再让整个同步失败（否则 Codex 永远进不了模型选择器）。
+        try {
+          await connection.setModel(model.id);
+          modelThoughtLevels.set(
+            model.id,
+            connection.thinkingLevels().map(({ value, name }) => ({ value, name })),
+          );
+        } catch {
+          continue;
+        }
       }
-      if (selectedModel) await connection.setModel(selectedModel);
+      // 探测用的临时进程随后关闭；尽力切回原模型即可，失败不影响目录。
+      if (selectedModel) await connection.setModel(selectedModel).catch(() => {});
     } else if (selectedModel) {
       modelThoughtLevels.set(
         selectedModel,
@@ -59,12 +91,7 @@ export async function discoverAcpRuntimeConfig(input: {
       selectedModel,
       thoughtLevels: levels.map(({ value, name }) => ({ value, name })),
       selectedThought: levels.find((level) => level.selected)?.value ?? "",
-      modes:
-        connection.modeState()?.availableModes.map(({ id, name, description }) => ({
-          id,
-          name,
-          ...(description ? { description } : {}),
-        })) ?? [],
+      modes: connection.modeState()?.availableModes.map(toAcpModeOption) ?? [],
       selectedMode: connection.modeState()?.currentModeId ?? "",
     };
   } finally {

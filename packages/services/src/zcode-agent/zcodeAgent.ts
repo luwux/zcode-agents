@@ -1,3 +1,10 @@
+import type { BuiltinRuntimeStatus } from "../agent-runtime/builtin/builtinRuntimeStatus.js";
+import type {
+  BuiltinRuntimeAuthChange,
+  BuiltinRuntimeAuthResult,
+  SaveBuiltinRuntimeConfigInput,
+} from "../agent-runtime/builtin/builtinRuntimeService.js";
+import type { BuiltinRuntimeCatalogView } from "../agent-runtime/builtin/builtinRuntimeCatalogView.js";
 import type {
   AgentRuntimeId,
   BackgroundBashOutputResult,
@@ -67,6 +74,7 @@ import type {
   ZCodeWorkspaceGenerateTextResult,
   ZCodeWorkspaceGenerateTextParams,
   ZCodeWorkspaceHookTrustGrantResult,
+  ZCodeAutomationBotDeliveryTarget,
 } from "@zcode/shared";
 import type {
   ClientHello,
@@ -270,6 +278,8 @@ export interface ZCodeAgentSendPromptParamsBase extends ZCodeAgentSessionTarget 
   expectedProviderRevision?: string;
   runtimeProviderHeaders?: Record<string, string>;
   toolDenylist?: string[];
+  /** Bot 来源 turn 的稳定回推地址；只在当前 turn 内供 CronCreate 读取。 */
+  botDeliveryTarget?: ZCodeAutomationBotDeliveryTarget;
 }
 
 export type ZCodeAgentSendPromptParams = ZCodeAgentSendPromptParamsBase &
@@ -577,6 +587,8 @@ export interface AgentRuntimeInstallStatus {
   installHint?: string;
   reason?: string;
   configPath?: string;
+  /** 内置 Runtime（Claude Code / Codex / Pi）的受管安装、认证与 Provider 摘要；不含秘密。 */
+  builtin?: BuiltinRuntimeStatus["builtin"];
   models?: Array<{
     id: string;
     name: string;
@@ -592,7 +604,7 @@ export interface AgentRuntimeInstallStatus {
 }
 
 export interface AgentRuntimeConfigPreview {
-  modes?: Array<{ id: string; name: string; description?: string }>;
+  modes?: Array<{ id: string; name: string; description?: string; kind?: string }>;
   selectedMode?: string;
   models: Array<{
     id: string;
@@ -615,6 +627,30 @@ export interface IZCodeAgentService {
     args: string[];
   }): Promise<AgentRuntimeInstallStatus[]>;
   deleteAgentServer(id: string): Promise<AgentRuntimeInstallStatus[]>;
+  /**
+   * 保存内置 Runtime 配置；`apiKey` 仅写入加密凭据库，null 删除，undefined 保持不变；
+   * `create` 拒绝覆盖已存在的 ID；`env` 省略时保留已保存值。Host 运行时校验入参。
+   */
+  saveAgentRuntimeConfig(
+    input: SaveBuiltinRuntimeConfigInput,
+  ): Promise<AgentRuntimeInstallStatus[]>;
+  deleteAgentRuntimeConfig(id: string): Promise<AgentRuntimeInstallStatus[]>;
+  /** 内置 Runtime 的认证方式与 Provider 预设（代码常量，不含秘密），供设置页表单使用。 */
+  listBuiltinRuntimeCatalog(): Promise<BuiltinRuntimeCatalogView>;
+  /**
+   * 订阅登录：返回登录 URL/设备码提示；完成状态经 listAgentRuntimes 的 builtin.authState 呈现。
+   * 登录与工作区无关，进程 cwd 为该配置的私有目录。
+   */
+  loginAgentRuntime(params: {
+    runtimeId: AgentRuntimeId;
+    methodId?: string;
+    deviceAuth?: boolean;
+  }): Promise<BuiltinRuntimeAuthResult>;
+  logoutAgentRuntime(params: { runtimeId: AgentRuntimeId }): Promise<BuiltinRuntimeAuthResult>;
+  /** 浏览器登录显示授权码时，把用户粘贴的授权码交给进行中的登录进程。 */
+  submitAgentRuntimeLoginCode(params: { runtimeId: AgentRuntimeId; code: string }): Promise<void>;
+  /** 认证状态变化（Host AcpAuthStateStore）：只作为重新读取 listAgentRuntimes 的触发信号。 */
+  onDynamicAgentRuntimeAuthChange(): Event<BuiltinRuntimeAuthChange>;
   saveAgentServerModels(
     input: ZCodeAgentWorkspaceTarget & {
       runtimeId: AgentRuntimeId;

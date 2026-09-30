@@ -21,6 +21,7 @@ import type { OffPeakClientConfig } from "#src/coding-plan-subscription/codingPl
 import {
   ZCODE_SESSION_RUNTIME_PREFERENCES_REQUEST_TIMEOUT_MS,
   ACP_DEFAULT_MODEL_ID,
+  ACP_DRAFT_ATTACHMENT_SESSION_PREFIX,
   formatLogPrefix,
   resolveWorkspaceKey,
   type TraceId,
@@ -247,7 +248,9 @@ import {
   V4_METHODS,
   V4_NOTIFICATIONS,
   v4AttachmentAbortResultSchema,
+  v4AttachmentBeginParamsSchema,
   v4AttachmentBeginResultSchema,
+  v4AttachmentChunkParamsSchema,
   v4AttachmentChunkResultSchema,
   v4AttachmentCommitResultSchema,
   v4AttachmentPreviewSourceParamsSchema,
@@ -291,6 +294,7 @@ import {
 import {
   readTrustedZCodeAgentV4Connection,
   readTrustedZCodeAgentV4UnsubscribeRoute,
+  type ZCodeAgentV4ConnectionContext,
 } from "./zcodeAgentConnectionScope.js";
 import { createBackgroundSessionEventCoalescer } from "#src/zcode-agent/zcodeSessionEventCoalescer.js";
 import { AutomationService } from "#src/session/automationService.js";
@@ -317,6 +321,20 @@ import {
 import type { PipSessionEvent } from "@zcode/zcode-cua/pip-session";
 import { registerMemoryDiagnosticsProvider } from "#src/memoryDiagnostics.js";
 import { AcpV4Bridge } from "#src/agent-runtime/acpV4Bridge.js";
+import { AcpAttachmentUploads } from "#src/agent-runtime/acpAttachmentUploads.js";
+import { listBuiltinRuntimeStatuses } from "#src/agent-runtime/builtin/builtinRuntimeStatus.js";
+import {
+  assertAgentServerIdAvailable,
+  deleteBuiltinRuntimeConfig,
+  loginBuiltinRuntime,
+  logoutBuiltinRuntimeConfig,
+  submitBuiltinRuntimeLoginCode,
+  onBuiltinRuntimeAuthChange,
+  saveBuiltinRuntimeConfig,
+  type BuiltinRuntimeAuthChange,
+} from "#src/agent-runtime/builtin/builtinRuntimeService.js";
+import { describeBuiltinRuntimeCatalog } from "#src/agent-runtime/builtin/builtinRuntimeCatalogView.js";
+import { projectBuiltinModels } from "#src/agent-runtime/builtin/builtinModelOptions.js";
 import { acpSpecIdentity, resolveAcpRuntimeSpec } from "#src/agent-runtime/acpRuntimeCatalog.js";
 import { readAcpModelCatalog, saveAcpModels } from "#src/agent-runtime/acpProviderModels.js";
 import {
@@ -374,6 +392,7 @@ type SessionSendCompatField =
   | "automationId"
   | "offPeakTaskId"
   | "offPeakRunType"
+  | "botDeliveryTarget"
   | "toolDenylist";
 
 const SESSION_CREATE_OPTIONAL_COMPAT_FIELDS = new Set<SessionCreateCompatField>([
@@ -404,6 +423,7 @@ const SESSION_SEND_OPTIONAL_COMPAT_FIELDS = new Set<SessionSendCompatField>([
   "automationId",
   "offPeakTaskId",
   "offPeakRunType",
+  "botDeliveryTarget",
   "toolDenylist",
 ]);
 // onDynamicSessionEvent 建立上游订阅时若 getClient / sessionSubscribe 瞬时失败
@@ -729,6 +749,9 @@ function buildSessionSendParams(
       : {}),
     ...(params.offPeakRunType !== undefined && !omittedFields.has("offPeakRunType")
       ? { offPeakRunType: params.offPeakRunType }
+      : {}),
+    ...(params.botDeliveryTarget !== undefined && !omittedFields.has("botDeliveryTarget")
+      ? { botDeliveryTarget: params.botDeliveryTarget }
       : {}),
     ...(params.toolDenylist !== undefined && !omittedFields.has("toolDenylist")
       ? { toolDenylist: params.toolDenylist }
@@ -1138,6 +1161,15 @@ export function createZCodeAgentService(
   >();
   // v4 conversation 帧 fan-out：workspace 级 emitter，renderer 侧按 topic 自行路由。
   const conversationFrameEmitters = new Map<string, Emitter<ConversationTopicWireCandidate>>();
+  // ACP 会话不在 zcode-cli 中，其分片附件由 Host 直接接收（见 acpAttachmentUploads.ts）。
+  const acpAttachmentUploads = new AcpAttachmentUploads();
+  // ACP 会话（含尚未创建的草稿）的附件上传由 Host 处理，其余转发给 zcode-cli。
+  // 修复原因：新建 ACP 对话在首条消息前还没有任务，UI 以 acp-draft- 前缀的临时会话 ID 上传粘贴图片。
+  const ownsAcpUpload = async (
+    params: Omit<Parameters<AcpV4Bridge["isAcpTask"]>[0], "taskId"> & { sessionId: string },
+  ) =>
+    params.sessionId.startsWith(ACP_DRAFT_ATTACHMENT_SESSION_PREFIX) ||
+    (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId }));
   const acpV4Bridge = new AcpV4Bridge(
     automationTaskIndexRepo,
     (target, frame) => getConversationFrameEmitter(target).fire(frame),
@@ -1147,6 +1179,11 @@ export function createZCodeAgentService(
   const localTtftFactsEmitter = new Emitter<{ workspaceKey: string; facts: LocalTtftFacts }>();
   const conversationTelemetryFactEmitters = new Map<string, Emitter<ConversationTelemetryFact>>();
   const cuaPermissionObservationEmitter = new Emitter<ZCodeAgentCuaPermissionObservation>();
+  // 内置 Runtime 认证状态的唯一所有者是 AcpAuthStateStore；这里只转发“某配置状态已变”的触发信号。
+  const agentRuntimeAuthChangeEmitter = new Emitter<BuiltinRuntimeAuthChange>();
+  const stopAgentRuntimeAuthChanges = onBuiltinRuntimeAuthChange((change) =>
+    agentRuntimeAuthChangeEmitter.fire(change),
+  );
   // sessions-index 帧 fan-out：与 conversation 同一 conversationFrame 通知，按 topic 前缀分流到此 emitter。
   const sessionsIndexFrameEmitters = new Map<string, Emitter<SessionsIndexTopicWireCandidate>>();
   // workspace-config 帧 fan-out：配置目录活性（task-index syncer 消费），同一通知按前缀分流。
@@ -1624,9 +1661,13 @@ export function createZCodeAgentService(
     return subscriberScope ? `${v4ConnectionId}#${subscriberScope}` : v4ConnectionId;
   }
 
-  function resolveV4Connection(params: unknown, fallbackConnectionId: string = v4ConnectionId) {
+  function resolveV4Connection(
+    params: unknown,
+    fallbackConnectionId: string = v4ConnectionId,
+  ): ZCodeAgentV4ConnectionContext {
     return (
       readTrustedZCodeAgentV4Connection(params) ?? {
+        // 没有可信 carrier 就是宿主内部直调：按旧消费者订阅（整键 patch），不猜能力。
         connectionId: fallbackConnectionId,
         clientMode: "desktop-continuous" as const,
       }
@@ -2519,6 +2560,7 @@ export function createZCodeAgentService(
                 modelSelection: parsed.data.modelSelection,
                 mode: parsed.data.mode,
                 targetTaskId: parsed.data.targetTaskId,
+                botDeliveryTarget: parsed.data.botDeliveryTarget,
                 workspacePath: workspace.workspacePath,
                 workspaceIdentity: workspace.workspaceIdentity,
                 recurring: parsed.data.recurring ?? true,
@@ -3223,6 +3265,8 @@ export function createZCodeAgentService(
     conversationTelemetryFactEmitters.clear();
     localTtftFactsEmitter.dispose();
     cuaPermissionObservationEmitter.dispose();
+    stopAgentRuntimeAuthChanges();
+    agentRuntimeAuthChangeEmitter.dispose();
     for (const emitter of workspaceConfigFrameEmitters.values()) {
       emitter.dispose();
     }
@@ -3340,6 +3384,7 @@ export function createZCodeAgentService(
   return {
     async listAgentRuntimes() {
       const registry = await readAgentServersRegistry();
+      const builtins = await listBuiltinRuntimeStatuses();
       const statuses = [
         {
           id: "zcode-cli" as const,
@@ -3348,6 +3393,17 @@ export function createZCodeAgentService(
           command: "built-in",
           configPath: registry.path,
         },
+        ...builtins.statuses.map(
+          ({ fingerprint: _fingerprint, configuredOptions: _options, ...status }) => status,
+        ),
+        ...builtins.issues.map((issue) => ({
+          id: issue.id,
+          name: issue.id,
+          installed: false,
+          command: "",
+          reason: issue.message,
+          configPath: issue.configPath,
+        })),
         ...registry.servers.map((server) => ({
           id: server.id,
           name: server.name,
@@ -3366,16 +3422,24 @@ export function createZCodeAgentService(
           configPath: registry.path,
         })),
       ];
+      const configuredOptions = new Map(
+        builtins.statuses.map((status) => [status.id, status.configuredOptions]),
+      );
       return Promise.all(
         statuses.map(async (status) => {
           const spec = status.id === "zcode-cli" ? null : await resolveAcpRuntimeSpec(status.id);
           if (!spec) return status;
+          // 停用的内置配置不在输入框模型选择器中提供（设置页仍可见、可重新启用）；
+          // BYOK 声明的模型由 Runtime 原生列出，选项 ID 与推理档位直接由配置推出，不依赖同步缓存。
+          const enabled = "builtin" in status && status.builtin ? status.builtin.enabled : true;
           try {
-            const catalog = await readAcpModelCatalog(status.id, acpSpecIdentity(spec));
             return {
               ...status,
-              models: [...catalog.models],
-              availableModels: [...catalog.availableModels],
+              ...(await projectBuiltinModels({
+                enabled,
+                configured: configuredOptions.get(status.id) ?? [],
+                catalog: () => readAcpModelCatalog(status.id, acpSpecIdentity(spec)),
+              })),
             };
           } catch (error) {
             return {
@@ -3389,12 +3453,36 @@ export function createZCodeAgentService(
       );
     },
     async saveAgentServer(input) {
+      await assertAgentServerIdAvailable(input.id);
       await saveAgentServerConfig(input);
       return this.listAgentRuntimes();
     },
     async deleteAgentServer(id) {
       await deleteAgentServerConfig(id);
       return this.listAgentRuntimes();
+    },
+    async saveAgentRuntimeConfig(input) {
+      await saveBuiltinRuntimeConfig(input);
+      return this.listAgentRuntimes();
+    },
+    async deleteAgentRuntimeConfig(id) {
+      await deleteBuiltinRuntimeConfig(id);
+      return this.listAgentRuntimes();
+    },
+    async listBuiltinRuntimeCatalog() {
+      return describeBuiltinRuntimeCatalog();
+    },
+    async loginAgentRuntime(params) {
+      return loginBuiltinRuntime(params);
+    },
+    async logoutAgentRuntime(params) {
+      return logoutBuiltinRuntimeConfig(params);
+    },
+    async submitAgentRuntimeLoginCode(params) {
+      return submitBuiltinRuntimeLoginCode(params);
+    },
+    onDynamicAgentRuntimeAuthChange() {
+      return agentRuntimeAuthChangeEmitter.event;
     },
     async saveAgentServerModels(input) {
       const spec = await resolveAcpRuntimeSpec(input.runtimeId);
@@ -3740,6 +3828,17 @@ export function createZCodeAgentService(
     },
 
     async listSessionSubagents(params: ZCodeAgentListSessionSubagentsParams) {
+      // ACP 根会话（及其虚拟子会话）的子智能体目录由 ACP 投影应答，不能转给 ZCode CLI。
+      if (await acpV4Bridge.isAcpTask({ ...params, taskId: params.sessionId })) {
+        return zcodeSessionSubagentsResultSchema.parse(
+          await acpV4Bridge.listSubagents({
+            ...params,
+            taskId: params.sessionId,
+            endedCursor: params.endedCursor,
+            endedLimit: params.endedLimit ?? 20,
+          }),
+        );
+      }
       const client = await getReadOnlyClient(params);
       return client.request(
         zcodeProtocolMethods.sessionSubagents,
@@ -5018,6 +5117,9 @@ export function createZCodeAgentService(
           compression: "none" as const,
           workspaceHookReview: true,
           independentPlanState: true,
+          // 与 connection scope 的 hello 同一份能力集：直连 base service 的宿主内部消费者
+          // 也能收到 `workflowRun.*` 增量（是否真收由它自己的 clientHello 决定）。
+          workflowRunDeltas: true,
         },
         auth: {},
       };
@@ -5105,7 +5207,11 @@ export function createZCodeAgentService(
           topic,
           connectionId: connection.connectionId,
           clientMode: connection.clientMode,
-          // 冷订阅过去只传 sessionId，CLI 只能从历史 session.path 反推
+          // 与 clientMode 同族的可信位（10 §3.1）：只由这里从连接的 clientHello 注入。
+          // 缺席即 CLI 按旧消费者发整键 patch，并先裁到旧界——重订阅、recovery、手机
+          // relay attachment 都走这一条 subscribe，所以这一处写全即可。
+          ...(connection.workflowRunDeltas === true ? { workflowRunDeltas: true } : {}),
+          // Bug 根因：冷订阅过去只传 sessionId，CLI 只能从历史 session.path 反推
           // workspace 身份；该路径已可能被 path.resolve 改写。当前 attachment 才是权威来源。
           workspace: buildWorkspaceRef(params),
           ...(resumeThoughtLevel ? { resumeThoughtLevel } : {}),
@@ -5286,6 +5392,19 @@ export function createZCodeAgentService(
     async attachmentBeginV4(params: ZCodeAgentAttachmentBeginParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await ownsAcpUpload(params))
+        return acpAttachmentUploads.begin(
+          v4AttachmentBeginParamsSchema.parse({
+            connectionId: trusted.connectionId,
+            uploadId: params.uploadId,
+            sessionId: params.sessionId,
+            fileName: params.fileName,
+            mime: params.mime,
+            totalBytes: params.totalBytes,
+            totalChunks: params.totalChunks,
+            checksum: params.checksum,
+          }),
+        );
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
@@ -5304,6 +5423,16 @@ export function createZCodeAgentService(
     async attachmentChunkV4(params: ZCodeAgentAttachmentChunkParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await ownsAcpUpload(params))
+        return acpAttachmentUploads.chunk(
+          v4AttachmentChunkParamsSchema.parse({
+            connectionId: trusted.connectionId,
+            uploadId: params.uploadId,
+            sessionId: params.sessionId,
+            chunkIndex: params.chunkIndex,
+            dataBase64: params.dataBase64,
+          }),
+        );
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
@@ -5319,6 +5448,12 @@ export function createZCodeAgentService(
     async attachmentCommitV4(params: ZCodeAgentAttachmentTerminalParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await ownsAcpUpload(params))
+        return acpAttachmentUploads.commit({
+          connectionId: trusted.connectionId,
+          uploadId: params.uploadId,
+          sessionId: params.sessionId,
+        });
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,
@@ -5336,6 +5471,14 @@ export function createZCodeAgentService(
     async attachmentAbortV4(params: ZCodeAgentAttachmentTerminalParams) {
       const trusted = readTrustedZCodeAgentV4Connection(params);
       if (!trusted) throw new Error("fault.attachment.connectionUntrusted");
+      if (await ownsAcpUpload(params)) {
+        acpAttachmentUploads.abort({
+          connectionId: trusted.connectionId,
+          uploadId: params.uploadId,
+          sessionId: params.sessionId,
+        });
+        return;
+      }
       const client = await getClient(params);
       const wireParams = {
         connectionId: trusted.connectionId,

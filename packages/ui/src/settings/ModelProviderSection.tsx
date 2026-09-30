@@ -38,6 +38,7 @@ import {
 } from "./model-provider-section/constants.js";
 import { ModelProviderSectionDetail } from "./model-provider-section/Detail.js";
 import { AcpProviderDetail } from "./model-provider-section/AcpProviderDetail.js";
+import { useAgentRuntimeAuthChanges } from "@/hooks/useBuiltinAcpRuntimes.js";
 import type { AgentRuntimeInstallStatus } from "@zcode/services";
 import { ModelProviderSectionLayout } from "./model-provider-section/SectionLayout.js";
 import { ProviderTemplatePicker } from "./model-provider-section/ProviderTemplatePicker.js";
@@ -253,9 +254,13 @@ export function ModelProviderSection({
     useServices();
   const [acpStatuses, setAcpStatuses] = useState<AgentRuntimeInstallStatus[]>([]);
   const [acpCreateOpen, setAcpCreateOpen] = useState(false);
+  // 认证事件、保存结果与手动刷新可能交错返回；只采用最新一次读取/写入的结果，后发先至的旧列表不覆盖新状态。
+  const acpStatusesSeqRef = useRef(0);
   const refreshAcpStatuses = useCallback(async () => {
+    const seq = ++acpStatusesSeqRef.current;
     try {
-      setAcpStatuses(await zcodeAgentService.listAgentRuntimes());
+      const statuses = await zcodeAgentService.listAgentRuntimes();
+      if (seq === acpStatusesSeqRef.current) setAcpStatuses(statuses);
     } catch (error) {
       logger.warn("[ModelProviderSection] ACP 供应商探测失败", error);
     }
@@ -263,6 +268,17 @@ export function ModelProviderSection({
   useEffect(() => {
     void refreshAcpStatuses();
   }, [refreshAcpStatuses]);
+  /** Host 写入（内置 ACP 配置保存/删除）直接返回的最新状态；同时通知会话页重新读取模型。 */
+  const applyAcpStatuses = useCallback((statuses: AgentRuntimeInstallStatus[]) => {
+    acpStatusesSeqRef.current += 1;
+    setAcpStatuses(statuses);
+    window.dispatchEvent(new Event("codez:acp-provider-models-changed"));
+  }, []);
+  // 登录进行中/完成后由 Host 的认证事件触发重新读取，无需轮询或手动刷新。
+  useAgentRuntimeAuthChanges(() => {
+    void refreshAcpStatuses();
+    window.dispatchEvent(new Event("codez:acp-provider-models-changed"));
+  });
   const {
     modelProviders,
     providerTemplates,
@@ -1121,6 +1137,8 @@ export function ModelProviderSection({
               create
               workspacePath={workspacePath}
               configPath={acpStatuses[0]?.configPath}
+              existingIds={acpStatuses.map((status) => status.id)}
+              onStatuses={applyAcpStatuses}
               onBack={() => setAcpCreateOpen(false)}
               onSaved={(id) => {
                 setAcpCreateOpen(false);
@@ -1138,6 +1156,8 @@ export function ModelProviderSection({
           status={selectedNavItem.status}
           workspacePath={workspacePath}
           configPath={acpStatuses[0]?.configPath}
+          onStatuses={applyAcpStatuses}
+          onRefresh={refreshAcpStatuses}
           onDeleted={() => {
             void refreshAcpStatuses();
             window.dispatchEvent(new Event("codez:acp-provider-models-changed"));

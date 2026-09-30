@@ -1,0 +1,88 @@
+{
+  "source": "codex",
+  "wire": "openai-responses",
+  "model": "gpt-5.4",
+  "note": "Hand-written permission-mode fixture: one file edit, one allowed command and one command the test judge denies, all inside the throwaway workspace (${WORKSPACE}). Used to compare bypass, accept-edits and ask modes.",
+  "turns": [
+    {
+      "user": {
+        "text": "Update the workspace as requested.",
+        "t_ms": 0
+      },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 10,
+          "text": "Writing the note.",
+          "phase": "commentary"
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 20,
+          "call_id": "call_mode_01",
+          "name": "exec_command",
+          "input": {
+            "cmd": "printf 'edited by replay\\n' > judge-edit.txt",
+            "workdir": "${WORKSPACE}",
+            "sandbox_permissions": "require_escalated",
+            "justification": "Write inside the workspace",
+            "yield_time_ms": 1000,
+            "max_output_tokens": 200
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 30,
+          "call_id": "call_mode_01",
+          "output": ""
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 40,
+          "call_id": "call_mode_02",
+          "name": "exec_command",
+          "input": {
+            "cmd": "touch judge-allowed.txt",
+            "workdir": "${WORKSPACE}",
+            "sandbox_permissions": "require_escalated",
+            "justification": "Write inside the workspace",
+            "yield_time_ms": 1000,
+            "max_output_tokens": 200
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 50,
+          "call_id": "call_mode_02",
+          "output": ""
+        },
+        {
+          "kind": "tool_call",
+          "t_ms": 60,
+          "call_id": "call_mode_03",
+          "name": "exec_command",
+          "input": {
+            "cmd": "touch judge-denied.txt",
+            "workdir": "${WORKSPACE}",
+            "sandbox_permissions": "require_escalated",
+            "justification": "Write inside the workspace",
+            "yield_time_ms": 1000,
+            "max_output_tokens": 200
+          }
+        },
+        {
+          "kind": "tool_result",
+          "t_ms": 70,
+          "call_id": "call_mode_03",
+          "output": ""
+        },
+        {
+          "kind": "text",
+          "t_ms": 80,
+          "text": "Done.",
+          "phase": "final_answer"
+        }
+      ]
+    }
+  ]
+}

@@ -13,11 +13,9 @@
 
 CodeZ 是 AI 编程工作台，提供桌面应用、浏览器界面和终端 Agent。本仓库包含客户端、后端服务、共享 UI，以及 Agent CLI 与运行时源码。
 
-| 入口                 | 用途                                                           | 开发命令                       |
-| -------------------- | -------------------------------------------------------------- | ------------------------------ |
-| Desktop              | Electron 桌面应用                                              | `pnpm dev:desktop`             |
-| Web / ZCode 命令行版 | 终端与浏览器工作台；将 TUI、Web、后端和 Agent 组装为独立运行包 | `pnpm dev:web`                 |
-| Agent CLI            | 在终端中使用 `zcode`，也为 Desktop 和 Web 提供 Agent 运行时    | `pnpm --filter @zcode/cli dev` |
+## 更新
+
+- 2026-9-23：更新至 ZCode v3.14.3 版本。
 
 ## 初始化
 
@@ -151,7 +149,7 @@ pnpm bundle:desktop -- --help
 
 默认产出正式 CodeZ 的 macOS arm64 包，输出目录为 `packages/desktop/dist/`。显式设置 `ZCODE_ENV=test` 或 `ZCODE_PREVIEW_IDENTITY=1` 可构建 Preview。`--os` 支持 `mac`、`win`、`linux`，`--arch` 支持 `x64`、`arm64`；实际打包与签名需要目标平台对应的工具和配置。
 
-缺失的内置插件资产在本机打包时从已安装的 `/Applications/ZCode.app/Contents/Resources/glm/packages` 读取；其他平台可通过 `CODEZ_OFFICIAL_PLUGIN_SOURCE` 指定同结构的插件目录。构建会拒绝缺失必需插件的包，导入的插件文件不进入 Git。分享包含第三方受限资产的安装包前需确认相应授权。
+缺失的内置插件资产在本机打包时从已安装的 `/Applications/ZCode.app/Contents/Resources/glm/packages` 读取；其他平台可通过 `CODEZ_OFFICIAL_PLUGIN_SOURCE` 指定同结构的插件目录。官方 ZCode 3.14.3 起安装包只带 browser-use-plugin 与 node-repl-host，其余闭源插件（documents、pdf、zcode-cua 等）缺失时构建告警并跳过，打出的包不含这些插件；设置 `CODEZ_REQUIRE_OFFICIAL_PLUGINS=1` 可恢复缺失即失败。导入的插件文件不进入 Git。分享包含第三方受限资产的安装包前需确认相应授权。
 
 安装：双击打开产物 DMG，将 CodeZ 拖入"应用程序"。本地构建未签名，首次打开若被 macOS 拦截，执行：
 
@@ -219,6 +217,10 @@ node dist/zcode/debug/zcode/bin/zcode.mjs --web \
 | `packages/provider`、`packages/provider-node`        | Provider 公共能力与 Node 实现              |
 | `apps/zcode-cli`                                     | Agent CLI、TUI、运行时与工具               |
 | `scripts`、`config`、`third-party`                   | 构建维护脚本、内置配置与第三方声明材料     |
+
+## 关于本分支
+
+本仓库派生自 [chent1024/codez](https://github.com/chent1024/codez)（其上游为 [zai-org/ZCode](https://github.com/zai-org/ZCode)），在其基础上内置了 Claude Code、Codex 与 Pi 三个 ACP 运行时，可用 API Key、订阅登录或本机 CLI 登录使用它们。详见 [docs/acp-runtimes.md](docs/acp-runtimes.md)。本分支与上游项目维护者、智谱 / Z.ai、Anthropic、OpenAI 均无隶属或背书关系；上方社群链接属于上游项目。修改范围与第三方运行时的许可见 [NOTICE.md](NOTICE.md) 第五节。
 
 ## 项目声明
 

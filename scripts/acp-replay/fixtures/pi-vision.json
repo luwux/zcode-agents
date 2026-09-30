@@ -1,0 +1,46 @@
+{
+  "source": "pi",
+  "wire": "anthropic-messages",
+  "model": "replay-pi",
+  "note": "Hand-written pasted-image fixture: one turn whose answer is the number drawn in the pasted PNG; the CDP test asserts the request carried an image block.",
+  "turns": [
+    {
+      "user": {
+        "text": "What number is written in the attached image?",
+        "t_ms": 0
+      },
+      "events": [
+        {
+          "kind": "text",
+          "t_ms": 0,
+          "text": "The number "
+        },
+        {
+          "kind": "text",
+          "t_ms": 600,
+          "text": "written in "
+        },
+        {
+          "kind": "text",
+          "t_ms": 1200,
+          "text": "the image "
+        },
+        {
+          "kind": "text",
+          "t_ms": 1800,
+          "text": "is "
+        },
+        {
+          "kind": "text",
+          "t_ms": 2400,
+          "text": "4827"
+        },
+        {
+          "kind": "text",
+          "t_ms": 3000,
+          "text": "."
+        }
+      ]
+    }
+  ]
+}

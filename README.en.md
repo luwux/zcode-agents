@@ -13,11 +13,9 @@
 
 ZCode is an AI coding workspace with desktop, browser, and terminal interfaces. This repository contains the clients, backend services, shared UI, and Agent CLI and runtime source code.
 
-| Interface                    | Purpose                                                                                   | Development command            |
-| ---------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------ |
-| Desktop                      | Electron desktop application                                                              | `pnpm dev:desktop`             |
-| Web / ZCode CLI distribution | Terminal and browser workspace; packages the TUI, Web client, backend, and Agent together | `pnpm dev:web`                 |
-| Agent CLI                    | The `zcode` terminal interface, which also provides the Agent runtime for Desktop and Web | `pnpm --filter @zcode/cli dev` |
+## Updates
+
+- 2026-9-23: Updated to ZCode v3.14.3.
 
 ## Setup
 
@@ -207,6 +205,10 @@ Open `http://127.0.0.1:3030` to validate the complete flow, with one backend ser
 | `packages/provider`, `packages/provider-node`        | Common provider capabilities and Node implementations                                   |
 | `apps/zcode-cli`                                     | Agent CLI, TUI, runtime, and tools                                                      |
 | `scripts`, `config`, `third-party`                   | Build and maintenance scripts, built-in configuration, and third-party notice materials |
+
+## About This Fork
+
+This repository is a fork of [chent1024/codez](https://github.com/chent1024/codez) (itself derived from [zai-org/ZCode](https://github.com/zai-org/ZCode)). It adds built-in Claude Code, Codex and Pi ACP runtimes that can be used with an API key, a subscription sign-in or your existing CLI login; see [docs/acp-runtimes.md](docs/acp-runtimes.md). This fork is not affiliated with or endorsed by the upstream maintainers, Zhipu / Z.ai, Anthropic or OpenAI; the community links above belong to the upstream project. Section 5 of [NOTICE.md](NOTICE.md) lists the modifications and the licenses of the third-party runtimes, which are downloaded on first use and not redistributed here.
 
 ## Project Notice
 
