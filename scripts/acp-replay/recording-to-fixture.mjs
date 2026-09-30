@@ -17,7 +17,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { anthropicIsContinuation, hasTools } from "./replay-core.mjs";
+import { anthropicIsContinuation, firstUserText, hasTools } from "./replay-core.mjs";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -53,7 +53,17 @@ function findWorkspace() {
     const match = system.match(/(?:Primary working directory|Working directory): ([^\s"\\]+)/);
     if (match) return match[1];
   }
-  return null;
+  // 修复原因：Claude Code 的系统提示格式会变，认不出时退回到录制内容里最常见的 `.../workspace` 路径
+  // （live harness 的工作区总是 `<临时目录>/workspace`），否则真实路径会留在夹具里、回放时指向不存在的目录。
+  const counts = new Map();
+  for (const entry of entries)
+    for (const [
+      path,
+    ] of `${JSON.stringify(entry.request.messages ?? [])}${entry.response ?? ""}`.matchAll(
+      /\/(?:tmp|var|private)\/[^\s"'`\\]*?\/workspace(?=[/\s"'`\\]|$)/g,
+    ))
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 const workspace = findWorkspace();
 
@@ -151,13 +161,17 @@ function lastUser(request) {
   return (request.messages ?? []).findLast((message) => message?.role === "user");
 }
 
+/** 用户消息正文：去掉 Claude Code 自动附加的 `<system-reminder>` 上下文块，回放时发送的才是原始消息。 */
 function userText(request) {
   const content = lastUser(request)?.content;
-  if (typeof content === "string") return content;
-  return (content ?? [])
-    .filter((block) => block?.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+  const text =
+    typeof content === "string"
+      ? content
+      : (content ?? [])
+          .filter((block) => block?.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>\s*/g, "").trim();
 }
 
 function toolResults(request, at) {
@@ -181,6 +195,8 @@ function toolResults(request, at) {
 }
 
 const turns = [];
+/** Prompts the main agent passed to its Agent/Task tool: requests starting with one are a subagent's. */
+const agentPrompts = new Set();
 let turn = null;
 let turnStart = 0;
 for (const entry of entries) {
@@ -192,11 +208,15 @@ for (const entry of entries) {
   } else {
     turn.events.push(...toolResults(entry.request, entry.at - turnStart));
   }
-  const events = parseResponse(entry, entry.at - turnStart);
+  const lane = agentPrompts.has(firstUserText(entry.request)) ? "sub" : "main";
+  const events = parseResponse(entry, entry.at - turnStart).map((event) => ({ ...event, lane }));
+  for (const event of events)
+    if (event.kind === "tool_call" && /^(Agent|Task)$/.test(event.name) && event.input?.prompt)
+      agentPrompts.add(String(event.input.prompt).trim());
   turn.events.push(...events);
   // A text-only response ends its own segment (see replay-core `end_response`).
   if (!events.some((event) => event.kind === "tool_call"))
-    turn.events.push({ kind: "end_response", t_ms: events.at(-1)?.t_ms ?? 0 });
+    turn.events.push({ kind: "end_response", t_ms: events.at(-1)?.t_ms ?? 0, lane });
 }
 
 const fixture = scrub({
@@ -207,6 +227,8 @@ const fixture = scrub({
     values.note ??
     "Recorded from a real live run through record-proxy.mjs; real model output and timing.",
   recorded: true,
+  // 每段响应带 lane（main / sub），回放按请求方分发（见 replay-core ReplayCursor）。
+  lanes: true,
   turns,
 });
 const json = `${JSON.stringify(fixture, null, 2)}\n`;
