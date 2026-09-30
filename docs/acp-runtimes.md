@@ -174,5 +174,18 @@ a steering method keep the old behavior (the composer blocks sending while a tur
 | Live OpenRouter (website, harness and internet research; random 1-in-5 rejections in ask modes) | `cd packages/services && OPENROUTER_API_KEY=… node --import tsx --test test/e2e/live/*.live.e2e.ts` | openrouter.ai, github.com                           |
 | Desktop CDP                                                                                     | see `scripts/acp-cdp/README.md`                                                                     | replay: none; live: openrouter.ai                   |
 
-CI: `.github/workflows/acp-runtimes.yml` (the live job uses the `OPENROUTER_API_KEY` repository secret and
-writes the run cost to the job summary).
+CI: `.github/workflows/acp-runtimes.yml`. Pushes and pull requests run only the free suites; the
+paid OpenRouter jobs run on a manual dispatch (they use the `OPENROUTER_API_KEY` repository secret and
+write the run cost to the job summary).
+
+### Recorded trajectories
+
+Dispatching the workflow with **record** runs the Claude Code live cases (tools, steering, ask-mode
+prompts, web research, plus a `features` case: pasted image, native subagent, background command and a
+cancelled turn) through `scripts/acp-replay/record-proxy.mjs`, which keeps every request and the full
+response stream with per-chunk timing. `scripts/acp-replay/recording-to-fixture.mjs` turns each run
+into `scripts/acp-replay/fixtures/recorded/*.json` with the real model output and timing (workspace
+paths replaced, prompts not copied, refused if a key-like string appears), and the job commits them.
+Replay them at a fixed speed with `replay-proxy.mjs --tps 1000` (about 1000 tokens per second) instead
+of the recorded timing. Tools still run for real during replay, so their output can differ from the
+recording; replay tests check event shape, not model text.

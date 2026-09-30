@@ -4,12 +4,33 @@
   <img src="public/logo/icons/1024x1024.png" alt="CodeZ" width="128" height="128" />
 </div>
 <p align="center">
-  <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=47ag983c-8fcb-4d6d-814b-5395193a712c&amp;qr_code=true">飞书社群</a> ·
-  <a href="https://discord.gg/z9aBcQXZQ3">Discord</a>
+  <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=47ag983c-8fcb-4d6d-814b-5395193a712c&amp;qr_code=true">飞书社群（上游）</a> ·
+  <a href="https://discord.gg/z9aBcQXZQ3">Discord（上游）</a>
 </p>
 <p align="center">
   简体中文 | <a href="README.en.md">English</a>
 </p>
+
+> [!NOTE]
+> **本仓库是 CodeZ 的社区分支：内置 Claude Code、Codex 与 Pi 三个 ACP Agent。**
+> 派生自 [chent1024/codez](https://github.com/chent1024/codez)（上游为 [zai-org/ZCode](https://github.com/zai-org/ZCode)），与上游维护者、智谱 / Z.ai、Anthropic、OpenAI 均无隶属或背书关系。
+
+**本分支新增**
+
+- **内置 Agent**：在「设置 → 模型设置」中直接启用 Claude Code、Codex、Pi，首次使用时自动下载安装，每个配置的数据与登录状态相互隔离。
+- **三种登录方式**：API Key（OpenRouter、Anthropic、OpenAI、GLM、DeepSeek、Kimi 或自定义端点）、订阅登录（由官方 CLI 完成），或直接复用本机已登录的 CLI（与终端里的 `claude` / `codex` 共用会话）。
+- **与原生会话一致的体验**：模型与思考档位切换、会话模式、权限确认、子代理、后台任务、中途引导（steer）、粘贴图片。
+- **测试**：离线回放（真实 CLI + 录制的模型输出）、桌面端 CDP 端到端测试，以及手动触发的真实模型测试。
+
+详细配置见 [docs/acp-runtimes.md](docs/acp-runtimes.md)；修改范围与第三方运行时许可见 [NOTICE.md](NOTICE.md) 第五节。
+
+**致谢**
+
+- [zai-org/ZCode](https://github.com/zai-org/ZCode)：CodeZ 的原始项目（Apache-2.0）。
+- [chent1024/codez](https://github.com/chent1024/codez)（陈涛）：本分支直接派生的仓库，提供了 ACP 会话接入、权限模式、会话工作树等基础，本分支的内置 Agent 在其 ACP 后端之上开发。
+- [Agent Client Protocol](https://agentclientprotocol.com) 及其适配器 [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp)、[codex-acp](https://github.com/agentclientprotocol/codex-acp)；[LodyAI/acp-extension-pi](https://github.com/LodyAI/acp-extension-pi)（Pi 的 ACP 适配器与引导扩展）。
+- [Claude Code](https://github.com/anthropics/claude-code)（Anthropic）、[Codex](https://github.com/openai/codex)（OpenAI）、[Pi](https://github.com/earendil-works/pi)（Earendil Works）。
+- [Lody](https://lody.ai) 与 [T3 Code](https://github.com/pingdotgg/t3code)：API Key 注入与订阅登录方式的设计参考。
 
 CodeZ 是 AI 编程工作台，提供桌面应用、浏览器界面和终端 Agent。本仓库包含客户端、后端服务、共享 UI，以及 Agent CLI 与运行时源码。
 
@@ -217,10 +238,6 @@ node dist/zcode/debug/zcode/bin/zcode.mjs --web \
 | `packages/provider`、`packages/provider-node`        | Provider 公共能力与 Node 实现              |
 | `apps/zcode-cli`                                     | Agent CLI、TUI、运行时与工具               |
 | `scripts`、`config`、`third-party`                   | 构建维护脚本、内置配置与第三方声明材料     |
-
-## 关于本分支
-
-本仓库派生自 [chent1024/codez](https://github.com/chent1024/codez)（其上游为 [zai-org/ZCode](https://github.com/zai-org/ZCode)），在其基础上内置了 Claude Code、Codex 与 Pi 三个 ACP 运行时，可用 API Key、订阅登录或本机 CLI 登录使用它们。详见 [docs/acp-runtimes.md](docs/acp-runtimes.md)。本分支与上游项目维护者、智谱 / Z.ai、Anthropic、OpenAI 均无隶属或背书关系；上方社群链接属于上游项目。修改范围与第三方运行时的许可见 [NOTICE.md](NOTICE.md) 第五节。
 
 ## 项目声明
 

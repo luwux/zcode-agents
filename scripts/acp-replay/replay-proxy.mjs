@@ -2,7 +2,11 @@
 // Offline model replay proxy for built-in ACP runtime tests.
 //
 //   node scripts/acp-replay/replay-proxy.mjs --fixture fixtures/claude-code.json --workspace /tmp/ws \
-//     [--speed 20] [--port 0] [--log /tmp/replay.jsonl]
+//     [--speed 20 | --tps 1000] [--port 0] [--log /tmp/replay.jsonl]
+//
+// Timing: by default each event waits its recorded `t_ms` gap divided by `--speed` (capped by
+// `--max-delay-ms`). With `--tps N` recorded gaps are ignored and output is paced at a fixed
+// N tokens per second (about 4 characters per token), like a model streaming at that speed.
 //
 // Prints one JSON line `{"url": "http://127.0.0.1:<port>"}` on stdout once listening.
 // Speaks Anthropic Messages (`POST */v1/messages`, SSE or JSON) and OpenAI Responses
@@ -28,6 +32,7 @@ const { values } = parseArgs({
     fixture: { type: "string" },
     workspace: { type: "string" },
     speed: { type: "string", default: "20" },
+    tps: { type: "string", default: "0" },
     port: { type: "string", default: "0" },
     log: { type: "string" },
     "max-delay-ms": { type: "string", default: "1500" },
@@ -53,7 +58,12 @@ function log(entry) {
   if (values.log) appendFileSync(values.log, `${JSON.stringify({ at: Date.now(), ...entry })}\n`);
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(maxDelay, ms / speed)));
+const tps = Math.max(0, Number(values.tps) || 0);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Gap before an event: the recorded gap (sped up), or none when pacing by tokens per second. */
+const sleep = (ms) => (tps ? Promise.resolve() : wait(Math.min(maxDelay, ms / speed)));
+/** With `--tps`, the time a model streaming at that rate needs to emit `text`. */
+const pace = (text) => (tps ? wait((Math.ceil(String(text).length / 4) / tps) * 1000) : undefined);
 
 function chunks(text, size = 24) {
   const parts = [];
@@ -123,18 +133,21 @@ async function anthropicStream(res, model, reply) {
         index,
         content_block: { type: "text", text: "" },
       });
-      for (const part of chunks(event.text))
+      for (const part of chunks(event.text)) {
+        await pace(part);
         sse(res, "content_block_delta", {
           type: "content_block_delta",
           index,
           delta: { type: "text_delta", text: part },
         });
+      }
     } else if (event.kind === "thinking") {
       sse(res, "content_block_start", {
         type: "content_block_start",
         index,
         content_block: { type: "thinking", thinking: "", signature: "" },
       });
+      await pace(event.text || "…");
       sse(res, "content_block_delta", {
         type: "content_block_delta",
         index,
@@ -151,6 +164,7 @@ async function anthropicStream(res, model, reply) {
         index,
         content_block: { type: "tool_use", id: event.call_id, name: event.name, input: {} },
       });
+      await pace(JSON.stringify(event.input ?? {}));
       sse(res, "content_block_delta", {
         type: "content_block_delta",
         index,
@@ -290,13 +304,15 @@ async function handleResponses(req, res, body) {
         content_index: 0,
         part: { type: "output_text", text: "", annotations: [] },
       });
-      for (const part of chunks(text))
+      for (const part of chunks(text)) {
+        await pace(part);
         emit("response.output_text.delta", {
           item_id: item.id,
           output_index: outputIndex,
           content_index: 0,
           delta: part,
         });
+      }
       emit("response.output_text.done", {
         item_id: item.id,
         output_index: outputIndex,
@@ -314,6 +330,7 @@ async function handleResponses(req, res, body) {
         output_index: outputIndex,
         item: { ...item, status: "in_progress", arguments: "" },
       });
+      await pace(item.arguments);
       emit("response.function_call_arguments.delta", {
         item_id: item.id,
         output_index: outputIndex,

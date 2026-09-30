@@ -12,7 +12,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -25,6 +25,7 @@ import { saveBuiltinConfigApiKey } from "../../../src/agent-runtime/builtin/buil
 import type { AgentProviderSettings } from "../../../src/agent-runtime/builtin/builtinProviderPresets.js";
 import type { BuiltinAcpRuntime } from "../../../src/agent-runtime/builtin/builtinRuntimeCatalog.js";
 import { setDataBaseDir } from "../../../src/paths.js";
+import { redPng } from "./livePng.js";
 import { TaskIndexRepo } from "../../../src/session/taskIndexRepo.js";
 import {
   randomJudge,
@@ -45,7 +46,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../../../..");
 const replayDir = join(repoRoot, "scripts/acp-replay");
 
-export type LiveTask = "website" | "harness" | "internet";
+export type LiveTask = "website" | "harness" | "internet" | "features";
 
 export interface LiveCase {
   task: LiveTask;
@@ -62,6 +63,8 @@ export interface LiveCase {
   steer?: boolean;
   /** Use the runtime's preset directly even in record mode (covers Pi's built-in provider). */
   unrecorded?: boolean;
+  /** Model override (e.g. a vision model for the `features` task). */
+  model?: string;
 }
 
 const PROMPTS: Record<LiveTask, string> = {
@@ -83,7 +86,17 @@ const PROMPTS: Record<LiveTask, string> = {
     "https://raw.githubusercontent.com/zai-org/ZCode/main/README.md and the GitHub search API " +
     "(https://api.github.com/search/repositories?q=zcode+remote). Do not modify files. Fetch at most 6 " +
     "URLs, then reply with your findings and list every URL you actually fetched.",
+  // 录制用：一次会话覆盖看图、子代理、后台命令（随后的打断见 INTERRUPT_PROMPT）。
+  features:
+    "Do these steps in order. 1) Look at the attached image and state its main color in one word. " +
+    "2) Use your subagent tool (Agent / Task) exactly once to have a subagent run `ls` in this " +
+    "workspace and report how many entries it saw; tell me its answer. 3) Run the shell command " +
+    "`sleep 2 && echo background-done` in the background (run_in_background), then read its output. " +
+    "End with the line FEATURES DONE.",
 };
+
+/** 录制中途打断：长命令开始执行后由测试取消当前回合。 */
+const INTERRUPT_PROMPT = "Run the shell command `sleep 60 && echo slept` and then say SLEPT.";
 
 const STEER_PROMPT =
   "Change of plan while you work: also add a <footer> containing the exact text 'steered by CodeZ' " +
@@ -94,18 +107,20 @@ const TURN_TIMEOUT_MS: Record<LiveTask, number> = {
   website: 300_000,
   harness: 900_000,
   internet: 900_000,
+  features: 600_000,
 };
 
 export function providerFor(
   runtime: BuiltinAcpRuntime,
   baseUrl: string | null,
+  model = MODEL,
 ): AgentProviderSettings {
-  if (!baseUrl) return { preset: "openrouter", model: MODEL };
+  if (!baseUrl) return { preset: "openrouter", model };
   if (runtime === "codex")
-    return { preset: "custom", baseUrl: `${baseUrl}/v1`, model: MODEL, providerId: "openrouter" };
+    return { preset: "custom", baseUrl: `${baseUrl}/v1`, model, providerId: "openrouter" };
   if (runtime === "pi")
-    return { preset: "custom", baseUrl: `${baseUrl}/v1`, api: "openai-completions", model: MODEL };
-  return { preset: "custom", baseUrl, model: MODEL };
+    return { preset: "custom", baseUrl: `${baseUrl}/v1`, api: "openai-completions", model };
+  return { preset: "custom", baseUrl, model };
 }
 
 async function startRecorder(log: string): Promise<{ child: ChildProcess; url: string }> {
@@ -138,6 +153,7 @@ async function makeWorkspace(root: string, task: LiveTask): Promise<string> {
   }
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "README.md"), "# Live test workspace\n");
+  if (task === "features") await writeFile(join(root, "color.png"), redPng());
   execFileSync("git", ["init", "-q"], { cwd: workspace });
   return workspace;
 }
@@ -153,7 +169,7 @@ function pathOf(request: RequestPermissionRequest, workspace: string): string | 
 
 export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): void {
   for (const liveCase of cases) {
-    const name = `live ${MODEL}: ${runtime} ${liveCase.task} @ ${liveCase.modeId ?? "default"} (${liveCase.label})`;
+    const name = `live ${liveCase.model ?? MODEL}: ${runtime} ${liveCase.task} @ ${liveCase.modeId ?? "default"} (${liveCase.label})`;
     const turnTimeout = TURN_TIMEOUT_MS[liveCase.task];
     test(name, { skip, timeout: turnTimeout + 120_000 }, async () => {
       const root = await mkdtemp(join(tmpdir(), `codez-live-${runtime}-${liveCase.task}-`));
@@ -177,7 +193,7 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           name: `${runtime} via OpenRouter`,
           runtime,
           auth: "byok",
-          provider: providerFor(runtime, recorder?.url ?? null),
+          provider: providerFor(runtime, recorder?.url ?? null, liveCase.model),
           ...(liveCase.configEnv && Object.keys(liveCase.configEnv).length
             ? { env: liveCase.configEnv }
             : {}),
@@ -228,6 +244,18 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           taskId: meta.taskId,
           commandId: "live-1",
           text: PROMPTS[liveCase.task],
+          ...(liveCase.task === "features"
+            ? {
+                attachments: [
+                  {
+                    ref: join(root, "color.png"),
+                    fileName: "color.png",
+                    mime: "image/png",
+                    bytes: (await stat(join(root, "color.png"))).size,
+                  },
+                ],
+              }
+            : {}),
         });
         const task = { ...target, taskId: meta.taskId };
         let steerDelivery: string | null = null;
@@ -264,6 +292,29 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           turnTimeout,
           "live turn",
         );
+        let interrupted: string | null = null;
+        if (liveCase.task === "features") {
+          // 第二个回合：长命令开始后取消，录下中途打断。
+          const before = coordinator.rowsRange({ ...task, limit: 10_000 }).rows.length;
+          await coordinator.sendPrompt({ ...task, commandId: "live-2", text: INTERRUPT_PROMPT });
+          await waitFor(
+            () =>
+              coordinator!
+                .rowsRange({ ...task, limit: 10_000 })
+                .rows.slice(before)
+                .some((row) => row.kind === "toolCall") ||
+              coordinator!.snapshot(task)?.control.phase !== "running",
+            turnTimeout,
+            "interrupt turn tool call",
+          );
+          interrupted = coordinator.snapshot(task)?.control.phase ?? null;
+          await coordinator.cancel(task);
+          await waitFor(
+            () => coordinator!.snapshot(task)?.control.phase !== "running",
+            60_000,
+            "cancelled turn",
+          );
+        }
         const snapshot = coordinator.snapshot(task)!;
         const { rows } = coordinator.rowsRange({ ...task, limit: 10_000 });
         if (liveCase.steer) {
@@ -286,10 +337,11 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           runtime,
           task: liveCase.task,
           mode: snapshot.config.acpModeId,
-          model: MODEL,
+          model: liveCase.model ?? MODEL,
           seed: SEED,
           phase: snapshot.control.phase,
           steerDelivery,
+          interruptedWhile: interrupted,
           lastError: (snapshot.control as { lastError?: unknown }).lastError ?? null,
           decisions,
           tools: tools.map(({ toolName, status, inputText }) => ({
@@ -355,6 +407,10 @@ export function defineLiveCases(runtime: BuiltinAcpRuntime, cases: LiveCase[]): 
           const real = [];
           for (const path of cited) if (await exists(path)) real.push(path);
           assert.ok(real.length >= 1, `answer cites at least one real file: ${cited.join(", ")}`);
+        }
+        if (liveCase.task === "features") {
+          assert.match(answer, /red/i, "the model saw the attached image");
+          assert.equal(interrupted, "running", "the second turn was cancelled while running");
         }
         if (liveCase.task === "internet") {
           assert.ok(

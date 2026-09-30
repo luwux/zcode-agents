@@ -31,4 +31,17 @@ defineLiveCases("claude-code", [
     configEnv: sandboxEnvForBypass(),
     maxPermissions: 0,
   },
+  // 录制用：看图、子代理、后台命令与中途打断（视觉模型；仅在录制任务中运行）。
+  ...(process.env.CODEZ_LIVE_FEATURES === "1"
+    ? [
+        {
+          task: "features" as const,
+          modeId: "bypassPermissions",
+          label: "features",
+          configEnv: sandboxEnvForBypass(),
+          maxPermissions: 0,
+          model: process.env.CODEZ_LIVE_VISION_MODEL ?? "qwen/qwen3.7-flash",
+        },
+      ]
+    : []),
 ]);
