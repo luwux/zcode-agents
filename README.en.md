@@ -1,17 +1,38 @@
-# ZCode
+# CodeZ
 
 <div align="center">
-  <img src="public/logo/icons/1024x1024.png" alt="ZCode" width="128" height="128" />
+  <img src="public/logo/icons/1024x1024.png" alt="CodeZ" width="128" height="128" />
 </div>
 <p align="center">
-  <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=47ag983c-8fcb-4d6d-814b-5395193a712c&amp;qr_code=true">Feishu community</a> ·
-  <a href="https://discord.gg/z9aBcQXZQ3">Discord</a>
+  <a href="https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=47ag983c-8fcb-4d6d-814b-5395193a712c&amp;qr_code=true">Feishu community (upstream)</a> ·
+  <a href="https://discord.gg/z9aBcQXZQ3">Discord (upstream)</a>
 </p>
 <p align="center">
   <a href="README.md">简体中文</a> | English
 </p>
 
-ZCode is an AI coding workspace with desktop, browser, and terminal interfaces. This repository contains the clients, backend services, shared UI, and Agent CLI and runtime source code.
+> [!NOTE]
+> **This is a community fork of CodeZ with built-in Claude Code, Codex and Pi ACP agents.**
+> It is derived from [chent1024/codez](https://github.com/chent1024/codez) (upstream: [zai-org/ZCode](https://github.com/zai-org/ZCode)) and is not affiliated with or endorsed by the upstream maintainers, Zhipu / Z.ai, Anthropic or OpenAI.
+
+**What this fork adds**
+
+- **Built-in agents**: enable Claude Code, Codex or Pi under Settings → Model settings. Each is installed on first use, and every configuration keeps its own data and sign-in.
+- **Three ways to sign in**: an API key (OpenRouter, Anthropic, OpenAI, GLM, DeepSeek, Kimi or a custom endpoint), a subscription sign-in done by the official CLI, or your existing CLI login (sessions shared with `claude` / `codex` in your terminal).
+- **Same experience as native chats**: model and thinking-effort switching, session modes, permission prompts, subagents, background tasks, mid-turn steering and pasted images.
+- **Tests**: offline replay (real CLIs with recorded model output), desktop CDP end-to-end tests and manually triggered real-model tests.
+
+Setup details are in [docs/acp-runtimes.md](docs/acp-runtimes.md); section 5 of [NOTICE.md](NOTICE.md) lists the modifications and the licenses of the third-party runtimes.
+
+**Acknowledgements**
+
+- [zai-org/ZCode](https://github.com/zai-org/ZCode): the original project (Apache-2.0).
+- [chent1024/codez](https://github.com/chent1024/codez) (Chen Tao): the repository this fork is based on. It provides the ACP session integration, permission modes and session worktrees that the built-in agents are built on.
+- [Agent Client Protocol](https://agentclientprotocol.com) and its adapters [claude-agent-acp](https://github.com/agentclientprotocol/claude-agent-acp) and [codex-acp](https://github.com/agentclientprotocol/codex-acp); [LodyAI/acp-extension-pi](https://github.com/LodyAI/acp-extension-pi) (Pi's ACP adapter and steering extension).
+- [Claude Code](https://github.com/anthropics/claude-code) (Anthropic), [Codex](https://github.com/openai/codex) (OpenAI) and [Pi](https://github.com/earendil-works/pi) (Earendil Works).
+- [Lody](https://lody.ai) and [T3 Code](https://github.com/pingdotgg/t3code): design references for API-key injection and subscription sign-in.
+
+CodeZ is an AI coding workspace with desktop, browser, and terminal interfaces. This repository contains the clients, backend services, shared UI, and Agent CLI and runtime source code.
 
 ## Updates
 
@@ -205,10 +226,6 @@ Open `http://127.0.0.1:3030` to validate the complete flow, with one backend ser
 | `packages/provider`, `packages/provider-node`        | Common provider capabilities and Node implementations                                   |
 | `apps/zcode-cli`                                     | Agent CLI, TUI, runtime, and tools                                                      |
 | `scripts`, `config`, `third-party`                   | Build and maintenance scripts, built-in configuration, and third-party notice materials |
-
-## About This Fork
-
-This repository is a fork of [chent1024/codez](https://github.com/chent1024/codez) (itself derived from [zai-org/ZCode](https://github.com/zai-org/ZCode)). It adds built-in Claude Code, Codex and Pi ACP runtimes that can be used with an API key, a subscription sign-in or your existing CLI login; see [docs/acp-runtimes.md](docs/acp-runtimes.md). This fork is not affiliated with or endorsed by the upstream maintainers, Zhipu / Z.ai, Anthropic or OpenAI; the community links above belong to the upstream project. Section 5 of [NOTICE.md](NOTICE.md) lists the modifications and the licenses of the third-party runtimes, which are downloaded on first use and not redistributed here.
 
 ## Project Notice
 
